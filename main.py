@@ -83,10 +83,11 @@ if not _EMAIL_TO:
     _EMAIL_TO = [e for e in [SIVA_EMAIL, DHINESH_EMAIL] if e]
 
 # Password: try Windows Credential Manager first, fall back to GMAIL_APP_PASSWORD env var
-GMAIL_PASS = (
-    keyring.get_password("zoho_agent_gmail", "gmail_app_password")
-    or os.getenv("GMAIL_APP_PASSWORD", "")
-).strip()
+try:
+    _keyring_pass = keyring.get_password("zoho_agent_gmail", "gmail_app_password") or ""
+except Exception:
+    _keyring_pass = ""
+GMAIL_PASS = (_keyring_pass or os.getenv("GMAIL_APP_PASSWORD", "")).strip()
 if not GMAIL_PASS:
     log.warning("[Email] No Gmail password found. "
                 "On Windows run 'python setup_email.py'. "
