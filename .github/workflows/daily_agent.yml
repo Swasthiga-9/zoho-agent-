@@ -1,0 +1,54 @@
+name: Zoho Projects Daily Agent
+
+on:
+  schedule:
+    - cron: '30 2 * * *'   # 2:30 AM UTC = 8:00 AM IST every day
+  workflow_dispatch:         # allows manual trigger from GitHub UI
+
+jobs:
+  run-agent:
+    runs-on: ubuntu-latest
+
+    env:
+      ZOHO_REFRESH_TOKEN:  ${{ secrets.ZOHO_REFRESH_TOKEN }}
+      ZOHO_ACCESS_TOKEN:   ${{ secrets.ZOHO_ACCESS_TOKEN }}
+      ZOHO_CLIENT_ID:      ${{ secrets.ZOHO_CLIENT_ID }}
+      ZOHO_CLIENT_SECRET:  ${{ secrets.ZOHO_CLIENT_SECRET }}
+      ZOHO_PORTAL:         ${{ secrets.ZOHO_PORTAL }}
+      ZOHO_PROJECT_ID:     ${{ secrets.ZOHO_PROJECT_ID }}
+      OPENAI_API_KEY:      ${{ secrets.OPENAI_API_KEY }}
+      GMAIL_USER:          ${{ secrets.GMAIL_USER }}
+      GMAIL_APP_PASSWORD:  ${{ secrets.GMAIL_APP_PASSWORD }}
+      EMAIL_TO_1:          ${{ secrets.EMAIL_TO_1 }}
+      EMAIL_TO_2:          ${{ secrets.EMAIL_TO_2 }}
+      SIVA_EMAIL:          ${{ secrets.SIVA_EMAIL }}
+      DHINESH_EMAIL:       ${{ secrets.DHINESH_EMAIL }}
+      SIVA_TEAM:           ${{ secrets.SIVA_TEAM }}
+      DHINESH_TEAM:        ${{ secrets.DHINESH_TEAM }}
+      ESCALATION_DAYS:     "7"
+      BOT_COOLDOWN_HOURS:  "24"
+      NO_REPLY_HOURS:      "48"
+      KEYWORDS:            "blocked,urgent,overdue,review needed,stuck,waiting,delayed"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Zoho Agent
+        run: python main.py
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-logs-${{ github.run_number }}
+          path: logs/
+          retention-days: 30
