@@ -1,7 +1,7 @@
-# Zoho Projects AI Agent — Tools & Technologies Reference
+# Zoho Projects AI Agent — Tools, Technologies & Features Reference
 
 **Organisation:** Mithilai Solutions
-**Version:** 1.0
+**Version:** 2.0
 **Last Updated:** March 2026
 
 ---
@@ -18,6 +18,8 @@
 8. [Logging & Monitoring](#8-logging--monitoring)
 9. [Local Preview Server](#9-local-preview-server)
 10. [Summary Table](#10-summary-table)
+11. [Python Package Dependencies](#11-python-package-dependencies-requirementstxt)
+12. [Features — Complete List](#12-features--complete-list)
 
 ---
 
@@ -395,5 +397,396 @@ All other tools (asyncio, smtplib, email, urllib, http.server, logging, webbrows
 
 ---
 
-*Zoho Projects AI Agent — Tools & Technologies Reference*
+---
+
+## 12. Features — Complete List
+
+This section documents every feature built into the agent, including the purpose, how it works, and the business reason behind it.
+
+---
+
+### Feature 1 — Fetch All Tasks from All Projects
+
+**What it does:**
+Connects to the Zoho Projects portal (`mithilai`) every day and pulls every single task from every project — open, closed, in progress, testing, on hold — nothing is missed.
+
+**How it works:**
+- Fetches the list of all projects first
+- Then fetches all tasks from each project concurrently (up to 5 at a time)
+- Each task includes: name, status, priority, owner(s), start date, due date, description, % complete, created time, last updated time
+
+**Why it matters:**
+Manual monitoring of tasks across multiple projects is time-consuming and error-prone. The agent does a full sweep every morning so nothing slips through the cracks.
+
+---
+
+### Feature 2 — Intelligent Comment Types (7 Types)
+
+**What it does:**
+For every active task, the agent decides what kind of comment to post based on the task's current state — not a generic message, but a context-aware comment written specifically for that task by GPT-4o.
+
+**Comment Types:**
+
+| Type | When it triggers | What it says |
+|---|---|---|
+| `new_task` | First ever comment on a task | Welcomes the task by name, asks only for genuinely missing fields (owner, due date, description, blockers) |
+| `missing_info` | Owner / due date / description absent | Targeted questions about what is missing — never asks about things already filled in |
+| `analytics` | Task in progress, all info present | Progress health report: % complete, days elapsed, risks, next steps with owner names |
+| `replan` | Overdue / blocked / no reply 48h / on hold | Direct flag naming the exact issue, proposes concrete new timeline |
+| `digest` | Low-priority, inactive task | Brief 3–4 sentence nudge to post a status update |
+| `feedback_ack` | Human replied to bot's previous comment | Acknowledges the reply by name, summarises state, lists 2–3 next steps |
+| `testing_check` | Task moved to Testing / For Testing / QA | Structured testing checklist (see Feature 5) |
+
+**Business reason:**
+Generic "please update your task" comments get ignored. Comments that reference the actual task name, actual missing fields, actual days overdue, and actual human replies get read and acted on.
+
+---
+
+### Feature 3 — Comment Once Per Status (No Repetition)
+
+**What it does:**
+Once the agent has posted a comment for a task in a given status (e.g. "In Progress"), it will NOT post another comment until the status changes. This prevents the team from being bombarded with repeated messages.
+
+**How it works:**
+- Every bot comment silently embeds a hidden HTML marker: `<!--zs:in progress-->`
+- On the next run, the agent reads this marker from the last bot comment
+- If the current status matches the marker and no human has replied → the agent skips that task
+- The agent only comments again when:
+  - The task status changes (e.g. from In Progress → Testing)
+  - A human replies to the bot's previous comment
+  - The task becomes overdue or blocked keywords are found
+  - No reply for 48+ hours (escalation trigger)
+
+**Business reason:**
+Requested directly — "once the review comment is added, we don't need to add again if the task is in the same status." Repeated comments train the team to ignore them.
+
+---
+
+### Feature 4 — Open Tasks Are Not Nagged
+
+**What it does:**
+Tasks in Open / Not Started / To Do status receive only one initial `new_task` comment. After that, the agent waits silently until the team picks it up and moves it to In Progress — it does not keep posting reminders while the task sits in the backlog.
+
+**Why it matters:**
+Requested directly — "the task may be open for some time before it gets picked up, so I don't want the team to rush through the tasks because of this review comment." This prevents pressure on tasks that are legitimately queued.
+
+---
+
+### Feature 5 — Testing Status Checklist
+
+**What it does:**
+When a task moves to **Testing / For Testing / QA / In Testing**, the agent automatically posts a structured quality checklist as a comment on the task in Zoho Projects.
+
+**Checklist items:**
+1. **Hours logged** — confirm build time has been logged against this task
+2. **Required fields** — New Customisation Layer (if applicable), Menu/Module name, Client, Priority, Criticality
+3. **Screenshot evidence** — attach screenshots of ALL test scenarios (pass and fail)
+4. **Test steps** — document the exact steps taken so results can be reproduced
+5. **Sign-off question** — "Is this ready to move to UAT, or are there items still failing?"
+
+**How it works:**
+- Posted once per testing cycle — will not repeat until the task leaves and re-enters testing status
+- If the tester replies to the checklist comment, the agent acknowledges the reply (`feedback_ack`)
+- If no reply for 48h → escalation triggered
+
+**Business reason:**
+Requested directly — ensure testers fill in hours, evidence, fields, and steps before moving to UAT. Enforces a quality gate at every testing cycle.
+
+---
+
+### Feature 6 — Feedback Loop (Human Reply Detection)
+
+**What it does:**
+The agent reads every comment on every task. When it detects that a human has replied to a previous bot comment, it adjusts its next comment type accordingly — it does not repeat the same question.
+
+**How it works:**
+```
+Bot posts comment (e.g. "missing_info" — asks for due date)
+         ↓
+Human replies: "Due date is 15 April"
+         ↓
+Next run: Agent detects the human reply
+         ↓
+Posts "feedback_ack" — acknowledges the reply,
+confirms the due date, lists next steps
+         ↓
+Does NOT ask for the due date again
+```
+
+**Reply with blocked keyword:**
+If the human's reply contains words like "blocked", "stuck", "waiting" → the agent skips `feedback_ack` and posts a `replan` comment + sends an escalation email instead.
+
+**Business reason:**
+Without reply detection, the bot would repeat the same question even after it has been answered — making it feel robotic and useless. The feedback loop makes comments feel like a real conversation.
+
+---
+
+### Feature 7 — No-Reply Escalation (48-Hour Rule)
+
+**What it does:**
+If the agent asked a question (via `new_task` or `missing_info` comment) and nobody from the team replied for **48 hours**, it automatically:
+1. Posts a `replan` comment on the task flagging the lack of response
+2. Sends an escalation email to the relevant manager (Siva or Dhinesh)
+
+**Configurable:** `NO_REPLY_HOURS=48` in `.env` — can be changed to any number of hours.
+
+**Business reason:**
+Unanswered questions on tasks are a sign of a blocked or stalled task. 48 hours of silence is enough to warrant management attention.
+
+---
+
+### Feature 8 — Skip Closed / UAT / Completed Tasks
+
+**What it does:**
+The agent completely ignores tasks in the following statuses — no comment is posted, no escalation is triggered:
+- Closed
+- Completed
+- Deployed
+- Ready for UAT
+- UAT
+- Done
+
+**Business reason:**
+Requested directly — "please don't comment on closed or ready for UAT tasks." Commenting on finished tasks is noise and could confuse the team about whether action is needed.
+
+---
+
+### Feature 9 — 24-Hour Cooldown Guard
+
+**What it does:**
+Even if all other conditions are met, the agent will never post more than one comment on the same task within a 24-hour window.
+
+**Configurable:** `BOT_COOLDOWN_HOURS=24` in `.env`
+
+**Business reason:**
+Prevents the agent from flooding a task with multiple comments in edge cases (e.g. if run twice in a day or if multiple triggers fire simultaneously).
+
+---
+
+### Feature 10 — Unassigned Task Detection & Smart Assignment Email
+
+**What it does:**
+At the end of every run, the agent scans all open tasks with no owner assigned. For each unassigned task, it finds the single best-matched person from the team and sends a **personal email only to that one person** asking if they can take it.
+
+**How the matching works:**
+```
+Unassigned task: "Fix decimal hours in Labour Hire PO"
+         ↓
+Scan all COMPLETED tasks across all projects
+         ↓
+Keyword match: "Labour Hire", "PO", "decimal", "hours"
+         ↓
+Person who completed the most similar tasks = Ravi
+         ↓
+Email sent only to Ravi:
+"This task is unassigned. Based on your past work
+ on similar tasks, you seem like the best fit.
+ Can you take it?"
+```
+
+**What it does NOT do:**
+- Does not email everyone
+- Does not auto-assign (disabled by design)
+- Does not send any email if no match is found
+
+**Business reason:**
+Unassigned tasks fall into a gap. Sending the email only to the most relevant person (not a group) makes it a specific, actionable ask rather than a broadcast that everyone ignores.
+
+---
+
+### Feature 11 — Smart Escalation Routing (Siva / Dhinesh)
+
+**What it does:**
+When an escalation is triggered, the email goes to the right manager — not both — based on which team the task owner belongs to.
+
+**Routing logic:**
+```
+Task owner is in SIVA_TEAM   → escalation email goes only to Siva
+Task owner is in DHINESH_TEAM → escalation email goes only to Dhinesh
+Owner not in either list      → email goes to both Siva and Dhinesh
+Lists are blank               → email goes to both (safe fallback)
+```
+
+**Configuration in .env:**
+```
+SIVA_TEAM=Ravi,Anbu,Kiran
+DHINESH_TEAM=Priya,Suresh,Meena
+SIVA_EMAIL=sivakumarm@mithilai.com
+DHINESH_EMAIL=dhineshkumars@mithilai.com
+```
+
+**Escalation triggers:**
+- Task overdue by 7+ days (`ESCALATION_DAYS=7`)
+- Keywords found: blocked, urgent, stuck, waiting, delayed, overdue, review needed
+- No reply to bot question for 48+ hours
+- High priority task that is overdue
+
+**Business reason:**
+Sending every escalation to both managers creates noise. Routing to the right person ensures accountability and faster resolution.
+
+---
+
+### Feature 12 — Daily HTML Email Report
+
+**What it does:**
+After processing all tasks, sends a comprehensive HTML email report to the configured recipients.
+
+**Email contents:**
+- **Run summary table** — total tasks processed, comments posted, escalations triggered, run timestamp
+- **Per-person task breakdown** — for every team member with active tasks:
+  - Task name and project
+  - Status badge (colour-coded)
+  - Priority badge
+  - Progress bar (% complete)
+  - Timeline (start date → due date, days in progress)
+  - Last 3 comments on the task (with author and timestamp)
+  - What action the agent took today (comment type posted)
+  - "Open in Zoho ↗" link — click to go directly to the task in Zoho Projects
+
+**Recipients:**
+- **To:** Siva + Dhinesh (configurable via `EMAIL_TO_1`, `EMAIL_TO_2`)
+- **CC:** Arul + Prabha (configurable via `EMAIL_CC_1`, `EMAIL_CC_2`)
+
+**Business reason:**
+Managers get a full picture of where every person and every project stands — in their inbox every morning, without opening Zoho Projects.
+
+---
+
+### Feature 13 — Zoho Cliq: For Testing Notification
+
+**What it does:**
+Posts a daily message to the **Functional Chat** channel in Zoho Cliq listing all tasks currently in Testing / For Testing / QA status.
+
+**Message format:**
+```
+🧪 For Testing — 27 Mar 2026
+
+━━ Luna Project ━━
+  • Fix login timeout
+    Priority: HIGH  |  Owner: Ravi  |  Due: 28 Mar
+  • Decimal hours in PO
+    Priority: MEDIUM  |  Owner: Siva  |  Due: 30 Mar
+
+Please ensure screenshots, test steps and all required
+fields are filled before moving to UAT.
+```
+
+**Grouping:** By project
+**Sorting:** High → Medium → Low priority within each project
+
+**Business reason:**
+Requested directly — "share the list of tasks in For Testing stage by project, priority and criticality in the functional chat." Gives testers a single consolidated view of what needs their attention today.
+
+---
+
+### Feature 14 — Zoho Cliq: Daily Status Update for Arul
+
+**What it does:**
+Posts a daily message to the **Main Group / Status Update chat** listing all Open and In Progress tasks grouped by project — so Arul can check the status of every project first thing in the morning without opening Zoho Projects.
+
+**Message format:**
+```
+📋 Daily Status Update — 27 Mar 2026
+
+Luna Project (3 tasks)
+  • [In Progress] Dashboard redesign — Priya (60%)
+  • [In Progress] API integration — Suresh (30%)
+  • [Open] Report module — Unassigned (0%)
+
+Fenner Project (2 tasks)
+  • [In Progress] BPM Receipt Entry — Anbu (80%)
+  • [Open] Labour Hire PO fix — Unassigned (0%)
+```
+
+**Business reason:**
+Requested directly — "share the open and in-progress tasks — a separate message by projects in the main group or status update chat group, so Arul knows where we are in individual projects. Usually he will look in the morning: What is the status of Luna tasks?"
+
+---
+
+### Feature 15 — Local Interactive Report Server
+
+**What it does:**
+Running `preview_report.py` starts a local web server on port 8766 and opens an interactive HTML report in the browser. From this report, anyone can post comments directly to Zoho Projects without opening Zoho.
+
+**How inline commenting works:**
+```
+Click "Add Comment" on any task card
+         ↓
+Type comment in the text box
+         ↓
+Click "Post to Zoho ✓"
+         ↓
+Browser JS sends to localhost:8766/api/comment
+         ↓
+Python server forwards to Zoho Projects API
+         ↓
+Comment appears live in Zoho Projects
+         ↓
+New comment shown on the task card immediately
+```
+
+**Additional controls:**
+- **↻ Refresh Data** — re-fetches all tasks and comments without restarting the server
+- **Open in Zoho ↗** — per-task link that opens the task directly in Zoho Projects
+
+**Business reason:**
+Provides a single-page consolidated view of all tasks with inline commenting — faster than navigating Zoho Projects across multiple projects.
+
+---
+
+### Feature 16 — Automated Daily Schedule (GitHub Actions)
+
+**What it does:**
+The entire agent runs automatically every day at **8:00 AM IST** on GitHub's cloud servers — even when the local PC is switched off.
+
+**Manual trigger:**
+Can also be triggered manually at any time from the GitHub Actions tab → Run workflow button.
+
+**Business reason:**
+Requested directly — "I need it to run also when the PC is in off condition." GitHub Actions provides free, reliable cloud compute for this.
+
+---
+
+### Feature 17 — Secure Credential Storage
+
+**What it does:**
+No passwords or API keys are ever stored in plain text in code or committed to GitHub.
+
+**Storage method:**
+| Credential | Storage Location |
+|---|---|
+| Gmail App Password (local) | Windows Credential Manager via `keyring` |
+| All secrets (cloud) | GitHub Secrets (AES-256 encrypted) |
+| Zoho tokens | `.env` file (in `.gitignore`) + GitHub Secrets |
+
+**Business reason:**
+Protects the organisation's API credentials, email accounts, and Zoho portal from exposure if the code repository is ever accessed by an unauthorised person.
+
+---
+
+### Feature Summary Table
+
+| # | Feature | Requested By | Status |
+|---|---|---|---|
+| 1 | Fetch all tasks from all projects | Core requirement | ✅ Live |
+| 2 | 7 intelligent comment types via GPT-4o | Core requirement | ✅ Live |
+| 3 | Comment once per status (no repetition) | User feedback | ✅ Live |
+| 4 | Open tasks not nagged | User feedback | ✅ Live |
+| 5 | Testing status checklist | User feedback | ✅ Live |
+| 6 | Feedback loop (human reply detection) | User feedback | ✅ Live |
+| 7 | No-reply escalation (48h rule) | Core requirement | ✅ Live |
+| 8 | Skip closed / UAT / completed tasks | User feedback | ✅ Live |
+| 9 | 24-hour cooldown guard | Core requirement | ✅ Live |
+| 10 | Unassigned task detection + smart email | User request | ✅ Live |
+| 11 | Smart escalation routing (Siva/Dhinesh) | User request | ✅ Live |
+| 12 | Daily HTML email report (per-person) | User request | ✅ Live |
+| 13 | Zoho Cliq: For Testing notification | User request | ✅ Live |
+| 14 | Zoho Cliq: Daily status update for Arul | User request | ✅ Live |
+| 15 | Local interactive report server | User request | ✅ Live |
+| 16 | Automated daily schedule (GitHub Actions) | User request | ✅ Live |
+| 17 | Secure credential storage | Core requirement | ✅ Live |
+
+---
+
+*Zoho Projects AI Agent — Tools, Technologies & Features Reference*
 *Built for Mithilai Solutions | Automated with GitHub Actions + OpenAI GPT-4o*
