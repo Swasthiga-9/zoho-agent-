@@ -1467,6 +1467,105 @@ async def process_task(
     base_result["owners"]  = owners
     return base_result
 
+# ── Zoho Cliq Notifications ───────────────────────────────────────────────────
+
+CLIQ_FUNCTIONAL_WEBHOOK = os.getenv("CLIQ_FUNCTIONAL_WEBHOOK", "")   # For Testing list
+CLIQ_STATUS_WEBHOOK     = os.getenv("CLIQ_STATUS_WEBHOOK", "")        # Open/In Progress by project
+
+def _cliq_post(webhook_url: str, text: str) -> None:
+    """Post a plain-text message to a Zoho Cliq channel via incoming webhook."""
+    if not webhook_url:
+        return
+    payload = json.dumps({"text": text}).encode()
+    req = urllib.request.Request(
+        webhook_url, data=payload,
+        headers={"Content-Type": "application/json"}, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            r.read()
+        log.info("[Cliq] Posted to %s...", webhook_url[:60])
+    except Exception as e:
+        log.warning("[Cliq] Failed to post: %s", e)
+
+
+def cliq_for_testing(tasks: list[dict]) -> None:
+    """Post all For-Testing tasks grouped by project, sorted by priority then criticality."""
+    if not CLIQ_FUNCTIONAL_WEBHOOK:
+        log.info("[Cliq] CLIQ_FUNCTIONAL_WEBHOOK not set — skipping For Testing notification")
+        return
+
+    testing = [
+        t for t in tasks
+        if t.get("status", {}).get("name", "").lower() in TESTING_STATUSES
+    ]
+    if not testing:
+        log.info("[Cliq] No tasks in Testing — skipping functional chat notification")
+        return
+
+    PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2, "none": 3, "": 3}
+
+    by_project: dict[str, list] = {}
+    for t in testing:
+        by_project.setdefault(t.get("project", {}).get("name", "?"), []).append(t)
+
+    lines = [f"🧪 *For Testing — {datetime.now().strftime('%d %b %Y')}*\n"]
+    for proj in sorted(by_project):
+        lines.append(f"━━ {proj} ━━")
+        sorted_tasks = sorted(
+            by_project[proj],
+            key=lambda t: PRIORITY_ORDER.get((t.get("priority") or "").lower(), 3)
+        )
+        for t in sorted_tasks:
+            name      = t.get("name", "?")
+            priority  = (t.get("priority") or "None").upper()
+            owners    = ", ".join(task_owner_names(t)) or "Unassigned"
+            due       = t.get("end_date", "No due date")
+            lines.append(f"  • {name}")
+            lines.append(f"    Priority: {priority}  |  Owner: {owners}  |  Due: {due}")
+        lines.append("")
+
+    lines.append("Please ensure screenshots, test steps and all required fields are filled before moving to UAT.")
+    _cliq_post(CLIQ_FUNCTIONAL_WEBHOOK, "\n".join(lines))
+
+
+def cliq_status_update(tasks: list[dict]) -> None:
+    """Post open + in-progress tasks grouped by project to the status/main group chat."""
+    if not CLIQ_STATUS_WEBHOOK:
+        log.info("[Cliq] CLIQ_STATUS_WEBHOOK not set — skipping status update notification")
+        return
+
+    ACTIVE = {"open", "in progress", "not started", "to do", "todo", "new",
+              "in review", "review", "development", "in development"}
+
+    active = [
+        t for t in tasks
+        if t.get("status", {}).get("name", "").lower() in ACTIVE
+    ]
+    if not active:
+        log.info("[Cliq] No open/in-progress tasks — skipping status update")
+        return
+
+    by_project: dict[str, list] = {}
+    for t in active:
+        by_project.setdefault(t.get("project", {}).get("name", "?"), []).append(t)
+
+    lines = [f"📋 *Daily Status Update — {datetime.now().strftime('%d %b %Y')}*\n"]
+    for proj in sorted(by_project):
+        ptasks = by_project[proj]
+        lines.append(f"*{proj}* ({len(ptasks)} task(s))")
+        for t in ptasks:
+            name    = t.get("name", "?")
+            status  = t.get("status", {}).get("name", "?")
+            owners  = ", ".join(task_owner_names(t)) or "Unassigned"
+            pct     = t.get("percent_complete", "0")
+            lines.append(f"  • [{status}] {name} — {owners} ({pct}%)")
+        lines.append("")
+
+    lines.append("_Zoho Projects Agent — automated daily update_")
+    _cliq_post(CLIQ_STATUS_WEBHOOK, "\n".join(lines))
+
+
 # ── Main Workflow ─────────────────────────────────────────────────────────────
 
 async def run_workflow() -> None:
@@ -1530,6 +1629,12 @@ async def run_workflow() -> None:
 
     log.info("[Unassigned] Checking for unassigned tasks...")
     await handle_unassigned_tasks(tasks, users)
+
+    log.info("[Cliq] Posting For Testing list to functional chat...")
+    cliq_for_testing(tasks)
+
+    log.info("[Cliq] Posting open/in-progress status update to main group...")
+    cliq_status_update(tasks)
 
     log.info("[Email] Building per-person report...")
     per_person_html = await build_per_person_html(tasks, results, run_time)
