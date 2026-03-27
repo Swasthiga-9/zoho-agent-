@@ -112,14 +112,15 @@ BOT_MARKER  = "— Zoho Agent •"
 
 # ── Status sets ───────────────────────────────────────────────────────────────
 
-OPEN_STATUSES   = {"open", "not started", "to do", "todo", "new"}
+OPEN_STATUSES    = {"open", "not started", "to do", "todo", "new"}
+TESTING_STATUSES = {"testing", "for testing", "in testing", "qa", "in qa", "uat testing"}
+CLOSED_STATUSES  = {"closed", "completed", "deployed", "ready for uat", "uat", "done"}
 
 def _on(t: dict) -> list[str]:
     """Return list of owner names for a task."""
     raw = (t.get("details") or {}).get("owners") or t.get("owners") or t.get("owner") or []
     return [o.get("name") or o.get("full_name", "") for o in raw
             if isinstance(o, dict) and (o.get("name") or o.get("full_name"))]
-CLOSED_STATUSES = {"closed", "completed", "deployed", "ready for uat", "uat", "done"}
 
 # ── Token refresh ─────────────────────────────────────────────────────────────
 
@@ -279,6 +280,14 @@ def human_replies_after_bot(comments: list[dict]) -> list[dict]:
         if not is_bot_comment(c) and int(c.get("created_time_long") or 0) > bot_ts
     ]
 
+def last_bot_commented_status(comments: list[dict]) -> str | None:
+    """Return the task status that was active when the bot last commented (from embedded marker)."""
+    bot_c = last_bot_comment(comments)
+    if not bot_c:
+        return None
+    m = re.search(r'<!--zs:(.*?)-->', bot_c.get("content", ""))
+    return m.group(1).strip().lower() if m else None
+
 async def fetch_comments(client: httpx.AsyncClient, project_id: str, task_id: str) -> list[dict]:
     try:
         data = await zoho_get(client, f"/projects/{project_id}/tasks/{task_id}/comments/")
@@ -354,13 +363,17 @@ def box_digest(text: str, priority: str = "none") -> str:
 def box_feedback_ack(text: str, priority: str = "none") -> str:
     return html_box("Update Acknowledged", "&#9989;", "#ecfdf5", "#10b981", text, priority)
 
+def box_testing_check(text: str, priority: str = "none") -> str:
+    return html_box("Testing Checklist", "&#128203;", "#f0f9ff", "#0284c7", text, priority)
+
 COMMENT_TYPE_BOX = {
-    "new_task":      box_new_task,
-    "missing_info":  box_missing_info,
-    "analytics":     box_analytics,
-    "replan":        box_replan,
-    "digest":        box_digest,
-    "feedback_ack":  box_feedback_ack,
+    "new_task":       box_new_task,
+    "missing_info":   box_missing_info,
+    "analytics":      box_analytics,
+    "replan":         box_replan,
+    "digest":         box_digest,
+    "feedback_ack":   box_feedback_ack,
+    "testing_check":  box_testing_check,
 }
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
@@ -465,12 +478,16 @@ def determine_comment_type(
     keywords: list[str],
     human_replied: bool,
     hours_since_last_bot: float,
-) -> str:
+) -> str | None:
     """
     Priority order:
-    1. Feedback loop — if human replied to bot's question → acknowledge + analyse
-    2. Feedback loop — if bot asked question and no human reply for NO_REPLY_HOURS → replan/escalate
-    3. Status/priority matrix
+    1. Testing status  — always post testing_check (once per entry into testing)
+    2. Feedback loop   — if human replied to bot's question → acknowledge + analyse
+    3. Feedback loop   — if bot asked question and no reply for NO_REPLY_HOURS → replan/escalate
+    4. Same-status skip — if bot already commented for this exact status and no human reply → skip
+    5. Status/priority matrix
+
+    Returns None to signal "skip this task entirely".
     """
     priority = (task.get("priority") or "none").lower()
     status   = (task.get("status", {}).get("name") or "").lower()
@@ -484,10 +501,15 @@ def determine_comment_type(
         elif "check-in required" in content or "missing" in content:
             bot_type = "missing_info"
 
+    # ── Testing status: post checklist comment once per testing cycle ─────────
+    if status in TESTING_STATUSES:
+        last_status = last_bot_commented_status(comments)
+        if last_status in TESTING_STATUSES and not human_replied:
+            return None   # already checked during this testing cycle
+        return "testing_check"
+
     # ── Feedback loop: human replied ─────────────────────────────────────────
     if human_replied:
-        # Human replied to our question — acknowledge and give analytics
-        # But if reply contains blocking keywords → escalate with replan
         if keywords:
             return "replan"
         return "feedback_ack"
@@ -495,11 +517,20 @@ def determine_comment_type(
     # ── Feedback loop: bot asked a question, no reply for too long ────────────
     if bot_type in ("new_task", "missing_info") and not human_replied:
         if hours_since_last_bot >= NO_REPLY_HOURS:
-            return "replan"   # escalate — no one responded
+            return "replan"
 
     # ── Closed tasks should never reach here, but guard anyway ───────────────
     if status in CLOSED_STATUSES:
-        return "digest"
+        return None
+
+    # ── Same-status skip for in-progress tasks ────────────────────────────────
+    # Once the bot has commented for a given status, don't repeat until status changes
+    # Exception: always re-comment if overdue, blocked keywords, or no-reply escalation
+    last_status = last_bot_commented_status(comments)
+    if (last_status and last_status == status
+            and not overdue and not keywords
+            and hours_since_last_bot < NO_REPLY_HOURS):
+        return None   # already commented for this status, nothing new to say
 
     # ── Check what's actually missing on this task ───────────────────────────
     owners_list = task_owner_names(task)
@@ -507,13 +538,13 @@ def determine_comment_type(
     has_due     = bool(task.get("end_date", ""))
     has_desc    = len(re.sub(r'<[^>]+>', '', task.get("description", "")).strip()) >= 10
 
-    # ── New / open tasks ──────────────────────────────────────────────────────
+    # ── Open tasks: only comment once (new_task) then wait for status change ──
     if status in OPEN_STATUSES:
         if not comments:
-            return "new_task"          # first ever comment on this task
+            return "new_task"
         if not has_owner or not has_due or not has_desc:
-            return "missing_info"      # info still absent after initial check-in
-        return "analytics"
+            return "missing_info"
+        return None   # open but not yet picked up — don't nag
 
     # ── On hold ──────────────────────────────────────────────────────────────
     if "on hold" in status or "hold" in status:
@@ -618,6 +649,16 @@ COMMENT TYPE INSTRUCTIONS
   - How many hours since the last update
   - One gentle reminder to post a status update today
   Keep it short — 3–4 sentences maximum.
+
+"testing_check"
+  The task has just entered Testing / For Testing / QA. Post a structured checklist reminder:
+  1. Hours logged — ask the developer to confirm build time has been logged against this task.
+  2. Required fields — ask the tester to confirm these are filled in: New Customisation Layer (if applicable), Menu/Module name, Client, Priority, Criticality.
+  3. Evidence — remind the tester to attach screenshots of ALL test scenarios (pass and fail).
+  4. Test steps — ask them to document the exact steps taken so the result can be reproduced.
+  5. Sign-off — ask: "Is this ready to move to UAT, or are there items still failing?"
+  Format as a numbered checklist. Address the task owner by name if available.
+  Tone: professional and thorough — this is a quality gate, not a nudge.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PRIORITY TONE
@@ -1386,6 +1427,14 @@ async def process_task(
         task, comments, days_in, keywords_found,
         human_replied, hours_since_last_bot,
     )
+
+    # None = skip (same status, open-but-not-started, or already in testing cycle)
+    if comment_type is None:
+        log.info("  Skipped — no new comment needed (same status or not yet in progress)")
+        base_result["actions"] = ["skipped_same_status"]
+        base_result["summary"] = f"No comment needed — status unchanged ({status_nm})."
+        return base_result
+
     box_fn = COMMENT_TYPE_BOX[comment_type]
     log.info("  Comment type: %s  (priority=%s, human_replied=%s, no_reply_esc=%s)",
              comment_type, priority, human_replied, no_reply_escalation)
@@ -1396,8 +1445,9 @@ async def process_task(
     )
     log.info("  Summary: %s", plan.get("summary", ""))
 
-    # ── Post comment ──────────────────────────────────────────────────────────
+    # ── Post comment (embed status marker so we can detect same-status on next run) ──
     html_comment = box_fn(plan.get("comment_text", ""), priority)
+    html_comment += f'<!--zs:{status_nm.lower()}-->'
     posted = await post_comment(client, project_id, task_id, html_comment)
     actions.append(comment_type if posted else "comment_failed")
 
