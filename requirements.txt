@@ -1,4 +1,5 @@
 openai
+anthropic
 httpx
 python-dotenv
 keyring

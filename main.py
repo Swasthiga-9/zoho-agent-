@@ -28,6 +28,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 
+import anthropic
 import httpx
 import keyring
 from openai import AsyncOpenAI
@@ -60,10 +61,21 @@ ZOHO_CLIENT_ID  = os.environ["ZOHO_CLIENT_ID"].strip("'")
 ZOHO_CLIENT_SEC = os.environ["ZOHO_CLIENT_SECRET"].strip("'")
 ZOHO_REFRESH    = os.environ["ZOHO_REFRESH_TOKEN"].strip("'")
 OPENAI_KEY      = os.getenv("OPENAI_API_KEY", "").strip("'")
+ANTHROPIC_KEY   = os.getenv("ANTHROPIC_API_KEY", "").strip("'")
 
 if not OPENAI_KEY:
     log.error("OPENAI_API_KEY is not set in .env — exiting.")
     sys.exit(1)
+if not ANTHROPIC_KEY:
+    log.warning("ANTHROPIC_API_KEY not set — BPM task analysis will fall back to OpenAI.")
+
+# BPM task detection keywords (task name / tasklist / description)
+BPM_KEYWORDS = [
+    "bpm", "business process management", "epicor bpm",
+    "pre-processing", "post-processing", "method directive",
+    "baq", "customization", "bos", "service connect",
+    "erp customisation", "erp customization", "customisation layer",
+]
 
 GMAIL_USER    = os.getenv("GMAIL_USER", "")
 SIVA_EMAIL    = os.getenv("SIVA_EMAIL", "")
@@ -157,8 +169,10 @@ def refresh_access_token() -> str:
 ZOHO_TOKEN   = refresh_access_token()
 ZOHO_HEADERS = {"Authorization": f"Zoho-oauthtoken {ZOHO_TOKEN}"}
 
-openai_client = AsyncOpenAI(api_key=OPENAI_KEY)
-MODEL = "gpt-4o-mini"
+openai_client  = AsyncOpenAI(api_key=OPENAI_KEY)
+claude_client  = anthropic.AsyncAnthropic(api_key=ANTHROPIC_KEY) if ANTHROPIC_KEY else None
+MODEL          = "gpt-4o-mini"
+CLAUDE_MODEL   = "claude-opus-4-6"
 
 # ── Zoho API helpers ──────────────────────────────────────────────────────────
 
@@ -366,6 +380,69 @@ def box_feedback_ack(text: str, priority: str = "none") -> str:
 def box_testing_check(text: str, priority: str = "none") -> str:
     return html_box("Testing Checklist", "&#128203;", "#f0f9ff", "#0284c7", text, priority)
 
+def box_bpm_analysis(sections: dict, priority: str = "none") -> str:
+    """Rich multi-section HTML box for BPM task analysis (rendered from Claude output)."""
+    badge_html, _ = PRIORITY_BADGE.get(priority.lower(), ("", None))
+    priority_row  = f'<div style="margin-bottom:8px">{badge_html}</div>' if badge_html else ""
+
+    def ul(items):
+        return "<ul style='margin:4px 0 8px 16px;padding:0'>" + \
+               "".join(f"<li style='margin:2px 0'>{i}</li>" for i in items) + "</ul>"
+
+    cs   = sections.get("code_suggestion", {})
+    pc   = cs.get("pseudocode", "").replace("\n", "<br>")
+    steps_html = ul(cs.get("steps", [])) if cs.get("steps") else ""
+    ec_html    = ul(cs.get("edge_cases", [])) if cs.get("edge_cases") else ""
+    pseudo_html = (
+        f'<div style="background:#1e293b;color:#e2e8f0;padding:10px 12px;'
+        f'border-radius:4px;font-family:monospace;font-size:12px;margin-top:6px;'
+        f'white-space:pre-wrap">{pc}</div>'
+    ) if pc else ""
+
+    body = (
+        f"<b style='color:#0369a1'>📌 Task Understanding</b><br>"
+        f"<p style='margin:4px 0 10px 0'>{sections.get('task_understanding','')}</p>"
+
+        f"<b style='color:#0369a1'>⚙️ Implementation / Logic Summary</b>"
+        f"{ul(sections.get('logic_summary', []))}"
+
+        f"<b style='color:#0369a1'>✅ Compact UAT Scenarios</b>"
+        f"{ul(sections.get('uat_scenarios', []))}"
+
+        f"<b style='color:#0369a1'>❓ Clarification Questions</b>"
+        f"{ul(sections.get('clarification_questions', []))}"
+
+        f"<b style='color:#0369a1'>💻 Code Suggestion</b><br>"
+        f"<span style='color:#475569;font-size:12px'><b>Area:</b> {cs.get('area','')}</span><br>"
+        f"{steps_html}"
+        f"<span style='color:#475569;font-size:12px'><b>Validation:</b> {cs.get('validation','')}</span><br>"
+        f"<span style='color:#475569;font-size:12px'><b>Error handling:</b> {cs.get('error_handling','')}</span><br>"
+        f"{ec_html}"
+        f"{pseudo_html}"
+    )
+
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+    return (
+        f'<div style="background:#f0f9ff;border-left:5px solid #0369a1;'
+        f'padding:14px 16px;border-radius:6px;font-family:Arial,sans-serif;'
+        f'font-size:13px;margin:4px 0">'
+        f'{priority_row}'
+        f'<b style="color:#0369a1;font-size:14px">🔧 ERP / BPM Analysis</b>'
+        f'<hr style="border:none;border-top:1px solid #0369a1;opacity:0.3;margin:8px 0">'
+        f'{body}'
+        f'<br><span style="color:#888;font-size:11px">{BOT_MARKER} {ts} · Powered by Claude Opus 4.6</span>'
+        f'</div>'
+    )
+
+def is_bpm_task(task: dict) -> bool:
+    """Return True if the task name, tasklist, or description contains BPM-related keywords."""
+    haystack = " ".join([
+        task.get("name", ""),
+        task.get("tasklist", {}).get("name", ""),
+        re.sub(r'<[^>]+>', ' ', task.get("description", "")),
+    ]).lower()
+    return any(kw in haystack for kw in BPM_KEYWORDS)
+
 COMMENT_TYPE_BOX = {
     "new_task":       box_new_task,
     "missing_info":   box_missing_info,
@@ -374,6 +451,7 @@ COMMENT_TYPE_BOX = {
     "digest":         box_digest,
     "feedback_ack":   box_feedback_ack,
     "testing_check":  box_testing_check,
+    "bpm_analysis":   None,   # handled separately via Claude — not via box_fn
 }
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
@@ -481,6 +559,7 @@ def determine_comment_type(
 ) -> str | None:
     """
     Priority order:
+    0. BPM task        — always post bpm_analysis (once per status cycle, via Claude)
     1. Testing status  — always post testing_check (once per entry into testing)
     2. Feedback loop   — if human replied to bot's question → acknowledge + analyse
     3. Feedback loop   — if bot asked question and no reply for NO_REPLY_HOURS → replan/escalate
@@ -500,6 +579,13 @@ def determine_comment_type(
             bot_type = "new_task"
         elif "check-in required" in content or "missing" in content:
             bot_type = "missing_info"
+
+    # ── BPM task: post ERP/BPM analysis once per status cycle via Claude ────────
+    if is_bpm_task(task) and status not in CLOSED_STATUSES:
+        last_status = last_bot_commented_status(comments)
+        if last_status == status and not human_replied:
+            return None   # already analysed in this status cycle
+        return "bpm_analysis"
 
     # ── Testing status: post checklist comment once per testing cycle ─────────
     if status in TESTING_STATUSES:
@@ -684,6 +770,96 @@ STRICT RULES
 - Always use the actual task name in your comment
 - Keep comment_text under 400 words
 - Return valid JSON only — no markdown, no extra text"""
+
+
+BPM_SYSTEM_PROMPT = """You are an ERP technical-functional analyst.
+
+Analyze the given Zoho task and generate a compact structured response for task comments.
+
+Your response must contain exactly this JSON (no markdown, no code fences):
+{
+  "task_understanding": "1-2 lines in plain English",
+  "logic_summary": ["bullet 1", "bullet 2", "...up to 8 bullets"],
+  "uat_scenarios": ["Scenario -> Expected Result", "...8-12 bullets"],
+  "clarification_questions": ["Question 1?", "...5-7 questions"],
+  "code_suggestion": {
+    "area": "probable module/event/method e.g. ReceivingEntry.Update pre-processing BPM",
+    "steps": ["step 1", "step 2", "...key processing steps"],
+    "validation": "core validation logic in plain English",
+    "error_handling": "what error message and how it is shown",
+    "edge_cases": ["edge case 1", "edge case 2", "..."],
+    "pseudocode": "short pseudocode (use \\n for line breaks)"
+  },
+  "escalate": false,
+  "escalate_reason": "",
+  "summary": "one-line task health summary (max 120 chars)"
+}
+
+Rules:
+- Keep it compact and practical — this goes into a Zoho Projects comment
+- Avoid unnecessary technical depth
+- Do not hallucinate exact schema/field names unless very likely
+- If assumptions are made, explicitly state them in the relevant section
+- UAT scenarios must be in format: "input condition -> expected result"
+- Pseudocode must be concise — 8-15 lines maximum
+- Return valid JSON only"""
+
+
+async def analyse_bpm_task(
+    task: dict,
+    comments: list[dict],
+    days_in_progress: float,
+) -> dict:
+    """Call Claude Opus 4.6 to analyse a BPM task and return structured sections."""
+    if not claude_client:
+        log.warning("[BPM] ANTHROPIC_API_KEY not set — skipping BPM analysis")
+        return {
+            "task_understanding": "BPM analysis unavailable — ANTHROPIC_API_KEY not configured.",
+            "logic_summary": [], "uat_scenarios": [], "clarification_questions": [],
+            "code_suggestion": {}, "escalate": False, "escalate_reason": "",
+            "summary": "BPM task — no Claude key",
+        }
+
+    desc_plain = re.sub(r'<[^>]+>', ' ', task.get("description", "")).strip()
+    owners     = task_owner_names(task)
+
+    snapshot = {
+        "task_name":         task.get("name"),
+        "project":           task.get("project", {}).get("name", "?"),
+        "tasklist":          task.get("tasklist", {}).get("name", "?"),
+        "status":            task.get("status", {}).get("name", "Unknown"),
+        "priority":          task.get("priority", "None") or "None",
+        "owners":            owners,
+        "due_date":          task.get("end_date", ""),
+        "description":       desc_plain[:800] if desc_plain else "",
+        "percent_complete":  task.get("percent_complete", "0"),
+        "days_in_progress":  round(days_in_progress, 1),
+        "is_overdue":        is_overdue(task),
+        "recent_comments":   summarise_comments(comments, limit=5),
+    }
+
+    try:
+        async with claude_client.messages.stream(
+            model=CLAUDE_MODEL,
+            max_tokens=2000,
+            thinking={"type": "adaptive"},
+            system=BPM_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": json.dumps(snapshot, indent=2)}],
+        ) as stream:
+            final = await stream.get_final_message()
+
+        text = next((b.text for b in final.content if b.type == "text"), "")
+        text = re.sub(r"^```[a-z]*\n?", "", text).rstrip("```").strip()
+        result = json.loads(text)
+        return result
+    except Exception as e:
+        log.warning("[BPM] Claude analysis failed: %s", e)
+        return {
+            "task_understanding": f"BPM analysis failed: {e}",
+            "logic_summary": [], "uat_scenarios": [], "clarification_questions": [],
+            "code_suggestion": {}, "escalate": False, "escalate_reason": "",
+            "summary": "BPM task — Claude error",
+        }
 
 
 async def analyse_task(
@@ -1435,9 +1611,30 @@ async def process_task(
         base_result["summary"] = f"No comment needed — status unchanged ({status_nm})."
         return base_result
 
-    box_fn = COMMENT_TYPE_BOX[comment_type]
     log.info("  Comment type: %s  (priority=%s, human_replied=%s, no_reply_esc=%s)",
              comment_type, priority, human_replied, no_reply_escalation)
+
+    # ── BPM task: use Claude Opus 4.6 for structured ERP analysis ─────────────
+    if comment_type == "bpm_analysis":
+        log.info("  [BPM] Calling Claude Opus 4.6 for ERP/BPM analysis...")
+        bpm_sections = await analyse_bpm_task(task, comments, days_in)
+        log.info("  [BPM] Summary: %s", bpm_sections.get("summary", ""))
+        html_comment  = box_bpm_analysis(bpm_sections, priority)
+        html_comment += f'<!--zs:{status_nm.lower()}-->'
+        posted = await post_comment(client, project_id, task_id, html_comment)
+        actions.append("bpm_analysis" if posted else "comment_failed")
+        if bpm_sections.get("escalate"):
+            send_escalation_email(task, bpm_sections.get("escalate_reason", "BPM escalation"),
+                                  days_in, keywords_found, owners)
+            actions.append("escalation_email")
+        log.info("  Actions: %s", ", ".join(actions))
+        base_result["actions"] = actions
+        base_result["summary"] = bpm_sections.get("summary", "")
+        base_result["owners"]  = owners
+        return base_result
+
+    # ── Standard tasks: use OpenAI GPT-4o ────────────────────────────────────
+    box_fn = COMMENT_TYPE_BOX[comment_type]
 
     # ── AI analysis ───────────────────────────────────────────────────────────
     plan = await analyse_task(
