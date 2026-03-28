@@ -429,7 +429,7 @@ def box_bpm_analysis(sections: dict, priority: str = "none") -> str:
 
         f"{code_block}"
         f"<br><span style='color:#888;font-size:11px'>"
-        f"{BOT_MARKER} {ts} · Powered by Claude Opus 4.6</span>"
+        f"{BOT_MARKER} {ts}</span>"
     )
 
     return (
