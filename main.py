@@ -120,7 +120,7 @@ KEYWORDS           = [k.strip().lower() for k in os.getenv(
 
 ENV_PATH    = os.path.join(os.path.dirname(__file__), ".env")
 PORTAL_BASE = f"https://projectsapi.zoho.in/restapi/portal/{ZOHO_PORTAL}"
-BOT_MARKER  = "— Zoho Agent •"
+BOT_MARKER  = "— MithilAI Agent •"
 
 # ── Status sets ───────────────────────────────────────────────────────────────
 
@@ -964,7 +964,7 @@ def send_escalation_email(
     recipients = route_escalation_recipients(owners)
     owner_str  = ", ".join(owners) or "Unassigned"
     project    = task.get("project", {}).get("name", "?")
-    subject    = f"[Zoho Agent] Escalation: {task.get('name', 'Task')} — Action Required"
+    subject    = f"[MithilAI Agent] Escalation: {task.get('name', 'Task')} — Action Required"
 
     # Indicate which team this is routed to
     routed_to = []
@@ -999,7 +999,7 @@ def send_escalation_email(
 </table>
 <p style="margin-top:16px;color:#7f8c8d;font-size:12px">
   Routed to: <b>{routed_str}</b> based on task ownership.<br>
-  Sent by Zoho Projects Agent — please review and take action in Zoho Projects.
+  Sent by MithilAI Agent — please review and take action in Zoho Projects.
 </p>
 </body></html>"""
 
@@ -1094,7 +1094,7 @@ def send_unassigned_task_email(
 <html><body style="font-family:Arial,sans-serif;color:#1e293b;max-width:600px;margin:auto">
 <div style="background:#1e293b;padding:18px 24px;border-radius:8px 8px 0 0">
   <h2 style="color:#fff;margin:0;font-size:18px">Unassigned Task — Your Expertise Needed</h2>
-  <p style="color:#94a3b8;margin:4px 0 0;font-size:12px">Zoho Projects Agent</p>
+  <p style="color:#94a3b8;margin:4px 0 0;font-size:12px">MithilAI Agent</p>
 </div>
 <div style="border:1px solid #e2e8f0;border-top:none;padding:24px;border-radius:0 0 8px 8px">
   <p style="margin:0 0 16px">Hi <b>{first_name}</b>,</p>
@@ -1129,7 +1129,7 @@ def send_unassigned_task_email(
     Please reply to this email or add a comment in Zoho to confirm if you can take this task,
     or suggest someone else who might be a better fit.
   </p>
-  <p style="margin:8px 0 0;font-size:12px;color:#94a3b8">— Zoho Agent (automated)</p>
+  <p style="margin:8px 0 0;font-size:12px;color:#94a3b8">— MithilAI Agent (automated)</p>
 </div>
 </body></html>"""
 
@@ -1407,7 +1407,7 @@ async def build_per_person_html(tasks: list[dict], results: list[dict], run_time
         f'{tt} tasks · {pt} people · {at} active · {ot} overdue</p></div>'
         f'{owner_secs}'
         f'<p style="font-size:10px;color:#94a3b8;text-align:center;margin-top:12px">'
-        f'Zoho Projects Agent · {run_time}</p></div>'
+        f'MithilAI Agent · {run_time}</p></div>'
     )
 
 
@@ -1495,7 +1495,7 @@ def send_daily_report_email(results: list[dict], run_time: str,
   <tbody>{rows_html}</tbody>
 </table>
 <div style="background:#f1f5f9;padding:16px 32px;border-radius:0 0 12px 12px;font-size:11px;color:#94a3b8;margin-top:0">
-  Zoho Projects Agent &bull; Automated daily report &bull; {run_time}<br>
+  MithilAI Agent &bull; Automated daily report &bull; {run_time}<br>
   Cooldown: {BOT_COOLDOWN_HOURS}h &bull; No-reply escalation after: {NO_REPLY_HOURS}h &bull;
   Escalation threshold: {ESCALATION_DAYS} days
 </div>
@@ -1512,7 +1512,7 @@ def send_daily_report_email(results: list[dict], run_time: str,
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = (
-        f"[Zoho Agent] Daily Report — {run_time[:10]} — "
+        f"[MithilAI Agent] Daily Report — {run_time[:10]} — "
         f"{total} tasks, {commented} comments, {escalated} escalations"
     )
     msg["From"] = GMAIL_USER
@@ -1759,7 +1759,7 @@ def cliq_status_update(tasks: list[dict]) -> None:
             lines.append(f"  • [{status}] {name} — {owners} ({pct}%)")
         lines.append("")
 
-    lines.append("_Zoho Projects Agent — automated daily update_")
+    lines.append("_MithilAI Agent — automated daily update_")
     _cliq_post(CLIQ_STATUS_WEBHOOK, "\n".join(lines))
 
 
@@ -1768,7 +1768,7 @@ def cliq_status_update(tasks: list[dict]) -> None:
 async def run_workflow() -> None:
     run_time = datetime.now().strftime("%Y-%m-%d %H:%M")
     log.info("=" * 65)
-    log.info("Zoho Projects Agent — %s", run_time)
+    log.info("MithilAI Agent — %s", run_time)
     log.info("Portal: %s  |  ALL PROJECTS + ALL TASKS", ZOHO_PORTAL)
     log.info("Feedback loop: no-reply escalation after %dh", NO_REPLY_HOURS)
     log.info("Smart routing: Siva team=%s | Dhinesh team=%s",
