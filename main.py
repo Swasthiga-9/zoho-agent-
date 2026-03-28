@@ -381,56 +381,62 @@ def box_testing_check(text: str, priority: str = "none") -> str:
     return html_box("Testing Checklist", "&#128203;", "#f0f9ff", "#0284c7", text, priority)
 
 def box_bpm_analysis(sections: dict, priority: str = "none") -> str:
-    """Rich multi-section HTML box for BPM task analysis (rendered from Claude output)."""
-    badge_html, _ = PRIORITY_BADGE.get(priority.lower(), ("", None))
-    priority_row  = f'<div style="margin-bottom:8px">{badge_html}</div>' if badge_html else ""
+    """Plain-text style BPM comment matching the team's preferred readable format."""
+    cs = sections.get("code_suggestion", {})
 
-    def ul(items):
-        return "<ul style='margin:4px 0 8px 16px;padding:0'>" + \
-               "".join(f"<li style='margin:2px 0'>{i}</li>" for i in items) + "</ul>"
+    def bullets(items):
+        return "".join(f"- {i}<br>" for i in items) if items else ""
 
-    cs   = sections.get("code_suggestion", {})
-    pc   = cs.get("pseudocode", "").replace("\n", "<br>")
-    steps_html = ul(cs.get("steps", [])) if cs.get("steps") else ""
-    ec_html    = ul(cs.get("edge_cases", [])) if cs.get("edge_cases") else ""
-    pseudo_html = (
-        f'<div style="background:#1e293b;color:#e2e8f0;padding:10px 12px;'
-        f'border-radius:4px;font-family:monospace;font-size:12px;margin-top:6px;'
-        f'white-space:pre-wrap">{pc}</div>'
-    ) if pc else ""
+    def indent_bullets(items, prefix="  - "):
+        return "".join(f"{prefix}{i}<br>" for i in items) if items else ""
 
+    pseudocode = cs.get("pseudocode", "").replace("\n", "<br>")
+    pseudo_block = (
+        f"  Pseudocode:<br>"
+        f'  <span style="font-family:monospace;font-size:12px">'
+        f'{pseudocode}</span><br>'
+    ) if pseudocode else ""
+
+    code_block = ""
+    if cs:
+        code_block = (
+            f"<b>Code Suggestion:</b><br>"
+            f"- Likely implementation area: {cs.get('area', '')}<br>"
+            f"- Key processing steps:<br>"
+            f"{indent_bullets(cs.get('steps', []))}"
+            f"- Validation logic:<br>"
+            f"  - {cs.get('validation', '')}<br>"
+            f"- Error handling:<br>"
+            f"  - {cs.get('error_handling', '')}<br>"
+        )
+        if cs.get("edge_cases"):
+            code_block += "- Edge cases:<br>" + indent_bullets(cs.get("edge_cases", []))
+        code_block += pseudo_block
+
+    ts   = datetime.now().strftime("%Y-%m-%d %H:%M")
     body = (
-        f"<b style='color:#0369a1'>📌 Task Understanding</b><br>"
-        f"<p style='margin:4px 0 10px 0'>{sections.get('task_understanding','')}</p>"
+        f"<b>Task Understanding:</b><br>"
+        f"{sections.get('task_understanding', '')}<br><br>"
 
-        f"<b style='color:#0369a1'>⚙️ Implementation / Logic Summary</b>"
-        f"{ul(sections.get('logic_summary', []))}"
+        f"<b>Implementation / Logic Summary:</b><br>"
+        f"{bullets(sections.get('logic_summary', []))}<br>"
 
-        f"<b style='color:#0369a1'>✅ Compact UAT Scenarios</b>"
-        f"{ul(sections.get('uat_scenarios', []))}"
+        f"<b>Compact UAT Scenarios:</b><br>"
+        f"{bullets(sections.get('uat_scenarios', []))}<br>"
 
-        f"<b style='color:#0369a1'>❓ Clarification Questions</b>"
-        f"{ul(sections.get('clarification_questions', []))}"
+        f"<b>Clarification Questions:</b><br>"
+        f"{bullets(sections.get('clarification_questions', []))}<br>"
 
-        f"<b style='color:#0369a1'>💻 Code Suggestion</b><br>"
-        f"<span style='color:#475569;font-size:12px'><b>Area:</b> {cs.get('area','')}</span><br>"
-        f"{steps_html}"
-        f"<span style='color:#475569;font-size:12px'><b>Validation:</b> {cs.get('validation','')}</span><br>"
-        f"<span style='color:#475569;font-size:12px'><b>Error handling:</b> {cs.get('error_handling','')}</span><br>"
-        f"{ec_html}"
-        f"{pseudo_html}"
+        f"{code_block}"
+        f"<br><span style='color:#888;font-size:11px'>"
+        f"{BOT_MARKER} {ts} · Powered by Claude Opus 4.6</span>"
     )
 
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
     return (
-        f'<div style="background:#f0f9ff;border-left:5px solid #0369a1;'
-        f'padding:14px 16px;border-radius:6px;font-family:Arial,sans-serif;'
-        f'font-size:13px;margin:4px 0">'
-        f'{priority_row}'
-        f'<b style="color:#0369a1;font-size:14px">🔧 ERP / BPM Analysis</b>'
-        f'<hr style="border:none;border-top:1px solid #0369a1;opacity:0.3;margin:8px 0">'
+        f'<div style="font-family:Arial,sans-serif;font-size:13px;'
+        f'border-left:4px solid #0369a1;padding:12px 16px;margin:4px 0;'
+        f'background:#f8fafc;border-radius:4px">'
         f'{body}'
-        f'<br><span style="color:#888;font-size:11px">{BOT_MARKER} {ts} · Powered by Claude Opus 4.6</span>'
         f'</div>'
     )
 
