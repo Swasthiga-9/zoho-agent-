@@ -17,6 +17,9 @@ jobs:
       ZOHO_PORTAL:         ${{ secrets.ZOHO_PORTAL }}
       ZOHO_PROJECT_ID:     ${{ secrets.ZOHO_PROJECT_ID }}
       OPENAI_API_KEY:      ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
+      CLIQ_FUNCTIONAL_WEBHOOK: ${{ secrets.CLIQ_FUNCTIONAL_WEBHOOK }}
+      CLIQ_STATUS_WEBHOOK:     ${{ secrets.CLIQ_STATUS_WEBHOOK }}
       GMAIL_USER:          ${{ secrets.GMAIL_USER }}
       GMAIL_APP_PASSWORD:  ${{ secrets.GMAIL_APP_PASSWORD }}
       EMAIL_TO_1:          ${{ secrets.EMAIL_TO_1 }}
