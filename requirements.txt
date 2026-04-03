@@ -3,3 +3,5 @@ anthropic
 httpx
 python-dotenv
 keyring
+fastapi
+uvicorn[standard]

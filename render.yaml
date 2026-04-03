@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: mithilai-cliq-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn cliq_bot_server:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ZOHO_PORTAL
+        sync: false
+      - key: ZOHO_CLIENT_ID
+        sync: false
+      - key: ZOHO_CLIENT_SECRET
+        sync: false
+      - key: ZOHO_REFRESH_TOKEN
+        sync: false
+      - key: ZOHO_ACCESS_TOKEN
+        sync: false
+      - key: ZOHO_PROJECT_ID
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: CLIQ_FUNCTIONAL_WEBHOOK
+        sync: false
+      - key: CLIQ_STATUS_WEBHOOK
+        sync: false

@@ -126,7 +126,14 @@ BOT_MARKER  = "— MithilAI Agent •"
 
 OPEN_STATUSES    = {"open", "not started", "to do", "todo", "new"}
 TESTING_STATUSES = {"testing", "for testing", "in testing", "qa", "in qa", "uat testing"}
-CLOSED_STATUSES  = {"closed", "completed", "deployed", "ready for uat", "uat", "done"}
+CLOSED_STATUSES  = {
+    "closed", "completed", "deployed", "ready for uat", "uat", "done",
+    "complete", "finish", "finished", "signed off", "sign off",
+    "cancelled", "canceled", "rejected", "deferred", "won't fix", "wontfix",
+    "deployed to production", "prod deployed", "released", "archived",
+    "ready for deployment", "ready to deploy",
+    "ongoing",  # team development status — no agent comments needed
+}
 
 def _on(t: dict) -> list[str]:
     """Return list of owner names for a task."""
@@ -382,7 +389,9 @@ def box_testing_check(text: str, priority: str = "none") -> str:
 
 def box_bpm_analysis(sections: dict, priority: str = "none") -> str:
     """Plain-text style BPM comment matching the team's preferred readable format."""
-    cs = sections.get("code_suggestion", {})
+    cs           = sections.get("code_suggestion", {})
+    team_status  = sections.get("team_status", "")
+    blocker_note = sections.get("blocker_analysis", "")
 
     def bullets(items):
         return "".join(f"- {i}<br>" for i in items) if items else ""
@@ -413,12 +422,28 @@ def box_bpm_analysis(sections: dict, priority: str = "none") -> str:
             code_block += "- Edge cases:<br>" + indent_bullets(cs.get("edge_cases", []))
         code_block += pseudo_block
 
+    # Blocker / status banner shown only when team is stuck or overdue
+    status_banner = ""
+    if team_status in ("stuck", "overdue") and blocker_note:
+        banner_color = "#dc2626" if team_status == "overdue" else "#b45309"
+        banner_bg    = "#fff1f2" if team_status == "overdue" else "#fffbeb"
+        label        = "&#9888; OVERDUE — ACTION NEEDED" if team_status == "overdue" else "&#128721; BLOCKER DETECTED"
+        status_banner = (
+            f'<div style="background:{banner_bg};border:1px solid {banner_color};'
+            f'border-radius:4px;padding:8px 12px;margin-bottom:10px">'
+            f'<b style="color:{banner_color}">{label}</b><br>'
+            f'{blocker_note}'
+            f'</div>'
+        )
+
     ts   = datetime.now().strftime("%Y-%m-%d %H:%M")
     body = (
+        f"{status_banner}"
+
         f"<b>Task Understanding:</b><br>"
         f"{sections.get('task_understanding', '')}<br><br>"
 
-        f"<b>Implementation / Logic Summary:</b><br>"
+        f"<b>{sections.get('logic_summary_label', 'Implementation / Logic Summary')}:</b><br>"
         f"{bullets(sections.get('logic_summary', []))}<br>"
 
         f"<b>Compact UAT Scenarios:</b><br>"
@@ -778,37 +803,135 @@ STRICT RULES
 - Return valid JSON only — no markdown, no extra text"""
 
 
-BPM_SYSTEM_PROMPT = """You are an ERP technical-functional analyst.
+BPM_SYSTEM_PROMPT = """You are an ERP technical-functional analyst specialising in Epicor ERP BPM, BAQ, and customisation development.
 
-Analyze the given Zoho task and generate a compact structured response for task comments.
+Analyse the given Zoho Projects task and generate a compact structured response for use as a project comment.
+Read the full task description AND all previous human comments before writing anything.
 
-Your response must contain exactly this JSON (no markdown, no code fences):
+RULES:
+1. Be 100% specific to THIS task — no generic boilerplate.
+2. Do NOT re-ask questions already answered in previous comments.
+3. If the team is stuck or blocked, prioritise concrete solutions in code_suggestion.
+4. Always include code_suggestion — even for early-stage tasks provide probable area and pseudocode.
+5. Keep everything compact and practical.
+6. Write for a FUNCTIONAL TEAM — avoid raw developer jargon in task_understanding and blocker_analysis. Plain English only.
+
+STATUS-BASED BEHAVIOUR:
+- If task status is Testing / For Testing / QA / In Testing:
+  * logic_summary_label must be "Testing Verification Points" (not Implementation)
+  * logic_summary bullets must describe WHAT THE FUNCTIONAL TEAM SHOULD VERIFY, not how it was built
+  * Do NOT describe implementation steps in logic_summary when task is in testing
+  * code_suggestion is still included — for reference only, not as action items
+  * Audience for this comment is the functional/QA team, not developers
+
+- If task status is In Progress / Open / On Hold:
+  * logic_summary_label must be "Implementation / Logic Summary"
+  * logic_summary bullets must describe the implementation logic steps
+
+CLARIFICATION QUESTIONS RULES — never ask these:
+- Do NOT ask about Classic vs Kinetic compatibility unless task description specifically raises it
+- Do NOT ask who is responsible for UAT sign-off
+- Do NOT ask client-specific questions (which client, which user, which department)
+- Do NOT re-ask anything already mentioned or answered in previous comments
+- Only ask questions that genuinely block progress on THIS task right now
+
+BLOCKER ANALYSIS RULES:
+- Write in plain English for a functional team manager reading it
+- Do NOT name specific developers from the comments (e.g. do not say "Siva has not responded")
+- Say "the development team" or "the assigned developer" instead
+- Focus on WHAT action is needed and by WHEN, not who failed to respond
+- Keep it to 3-4 sentences maximum
+
+Your response must be exactly this JSON (no markdown, no code fences, no extra keys):
 {
-  "task_understanding": "1-2 lines in plain English",
-  "logic_summary": ["bullet 1", "bullet 2", "...up to 8 bullets"],
-  "uat_scenarios": ["Scenario -> Expected Result", "...8-12 bullets"],
-  "clarification_questions": ["Question 1?", "...5-7 questions"],
+  "task_understanding": "1-2 lines in plain English for a functional team member — what this task does, current state, and what needs to happen next",
+  "logic_summary_label": "Implementation / Logic Summary  OR  Testing Verification Points — based on task status",
+  "logic_summary": [
+    "bullet specific to this task — implementation step OR testing verification point depending on status",
+    "... 5-8 bullets total"
+  ],
+  "uat_scenarios": [
+    "compact scenario -> expected result  (e.g. '106 received on PO 100 -> block')",
+    "... 8-12 scenarios covering happy path, boundary, rejection, edge cases, integration"
+  ],
+  "clarification_questions": [
+    "Question that is NOT already answered and NOT about Classic/UAT-signoff/client specifics?",
+    "... 5-7 questions total"
+  ],
+  "team_status": "on_track | needs_input | stuck | overdue",
+  "blocker_analysis": "if stuck or overdue: plain-English diagnosis and recommended actions for the functional team. No developer names. Max 3-4 sentences.",
   "code_suggestion": {
-    "area": "probable module/event/method e.g. ReceivingEntry.Update pre-processing BPM",
-    "steps": ["step 1", "step 2", "...key processing steps"],
+    "area": "probable module/event e.g. ReceivingEntry.Update pre-processing BPM",
+    "steps": [
+      "implementation step 1",
+      "... key processing steps"
+    ],
     "validation": "core validation logic in plain English",
-    "error_handling": "what error message and how it is shown",
+    "error_handling": "error message and how it is shown to the user",
     "edge_cases": ["edge case 1", "edge case 2", "..."],
-    "pseudocode": "short pseudocode (use \\n for line breaks)"
+    "pseudocode": "8-15 line pseudocode, use \\n for line breaks"
   },
   "escalate": false,
   "escalate_reason": "",
   "summary": "one-line task health summary (max 120 chars)"
 }
 
-Rules:
-- Keep it compact and practical — this goes into a Zoho Projects comment
-- Avoid unnecessary technical depth
-- Do not hallucinate exact schema/field names unless very likely
-- If assumptions are made, explicitly state them in the relevant section
-- UAT scenarios must be in format: "input condition -> expected result"
-- Pseudocode must be concise — 8-15 lines maximum
-- Return valid JSON only"""
+UAT scenario format rules:
+- One compact line per scenario using ->  e.g. "106 received on PO 100 -> block"
+- Use real values and field names from the task description where possible
+- Cover: happy path, boundary values, block/reject cases, edge cases, integration trigger
+- No explanatory sentences — just condition -> result
+
+Return valid JSON only — no markdown, no extra text."""
+
+
+def _bpm_format_comments(comments: list[dict]) -> str:
+    """Format ALL comments for BPM analysis, separating human vs bot comments."""
+    if not comments:
+        return "No comments yet."
+    lines = []
+    for c in comments:
+        author = _comment_author(c)
+        ts     = c.get("created_time_format", c.get("created_time", "?"))
+        raw    = re.sub(r'<[^>]+>', ' ', c.get("content", "")).strip()
+        # truncate very long comments but keep enough context
+        text   = raw[:400] if len(raw) > 400 else raw
+        is_bot = BOT_MARKER in raw
+        label  = "[BOT]" if is_bot else "[HUMAN]"
+        lines.append(f"{label} [{ts}] {author}: {text}")
+    return "\n".join(lines)
+
+
+def _bpm_detect_blockers(comments: list[dict]) -> dict:
+    """Scan human comments for stuck/blocked/error signals."""
+    stuck_keywords = [
+        "stuck", "blocked", "not working", "error", "issue", "problem",
+        "failed", "failing", "cannot", "can't", "doesn't work", "not sure",
+        "help", "doubt", "confused", "unclear",
+    ]
+    human_comments = [
+        c for c in comments
+        if BOT_MARKER not in re.sub(r'<[^>]+>', '', c.get("content", ""))
+    ]
+    is_stuck   = False
+    found_kws  = []
+    last_human = ""
+    if human_comments:
+        last_c     = human_comments[-1]
+        last_human = re.sub(r'<[^>]+>', ' ', last_c.get("content", "")).strip()[:300]
+        # scan all human comments for stuck signals
+        all_human_text = " ".join(
+            re.sub(r'<[^>]+>', ' ', c.get("content", "")).lower()
+            for c in human_comments
+        )
+        found_kws = [kw for kw in stuck_keywords if kw in all_human_text]
+        is_stuck  = bool(found_kws)
+    return {
+        "is_stuck":       is_stuck,
+        "stuck_keywords": found_kws[:5],
+        "last_human_comment": last_human,
+        "human_comment_count": len(human_comments),
+    }
 
 
 async def analyse_bpm_task(
@@ -826,28 +949,33 @@ async def analyse_bpm_task(
             "summary": "BPM task — no Claude key",
         }
 
-    desc_plain = re.sub(r'<[^>]+>', ' ', task.get("description", "")).strip()
-    owners     = task_owner_names(task)
+    desc_plain    = re.sub(r'<[^>]+>', ' ', task.get("description", "")).strip()
+    owners        = task_owner_names(task)
+    blocker_info  = _bpm_detect_blockers(comments)
+    all_comments  = _bpm_format_comments(comments)  # ALL comments, not just last 5
 
     snapshot = {
-        "task_name":         task.get("name"),
-        "project":           task.get("project", {}).get("name", "?"),
-        "tasklist":          task.get("tasklist", {}).get("name", "?"),
-        "status":            task.get("status", {}).get("name", "Unknown"),
-        "priority":          task.get("priority", "None") or "None",
-        "owners":            owners,
-        "due_date":          task.get("end_date", ""),
-        "description":       desc_plain[:800] if desc_plain else "",
-        "percent_complete":  task.get("percent_complete", "0"),
-        "days_in_progress":  round(days_in_progress, 1),
-        "is_overdue":        is_overdue(task),
-        "recent_comments":   summarise_comments(comments, limit=5),
+        "task_name":              task.get("name"),
+        "project":                task.get("project", {}).get("name", "?"),
+        "tasklist":               task.get("tasklist", {}).get("name", "?"),
+        "status":                 task.get("status", {}).get("name", "Unknown"),
+        "priority":               task.get("priority", "None") or "None",
+        "owners":                 owners,
+        "due_date":               task.get("end_date", ""),
+        "description":            desc_plain[:1500] if desc_plain else "",
+        "percent_complete":       task.get("percent_complete", "0"),
+        "days_in_progress":       round(days_in_progress, 1),
+        "is_overdue":             is_overdue(task),
+        "team_is_stuck":          blocker_info["is_stuck"],
+        "stuck_signals_detected": blocker_info["stuck_keywords"],
+        "last_human_comment":     blocker_info["last_human_comment"],
+        "all_comments":           all_comments,   # full comment history
     }
 
     try:
         async with claude_client.messages.stream(
             model=CLAUDE_MODEL,
-            max_tokens=2000,
+            max_tokens=3000,
             thinking={"type": "adaptive"},
             system=BPM_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": json.dumps(snapshot, indent=2)}],
@@ -1561,11 +1689,12 @@ async def process_task(
         "actions":   [],
     }
 
-    # ── Closed / UAT: no comment ──────────────────────────────────────────────
-    if status_nm.lower() in CLOSED_STATUSES:
-        log.info("  Closed/UAT — skipping comment")
+    # ── Closed / UAT / 100% complete: no comment ─────────────────────────────
+    pct_done = int(task.get("percent_complete", 0) or 0)
+    if status_nm.lower() in CLOSED_STATUSES or pct_done >= 100:
+        log.info("  Closed/UAT/100%% — skipping comment (status=%s, pct=%d)", status_nm, pct_done)
         base_result["actions"] = ["skipped_closed"]
-        base_result["summary"] = f"Task is {status_nm} — no comment posted."
+        base_result["summary"] = f"Task is {status_nm} ({pct_done}%%) — no comment posted."
         return base_result
 
     # ── Fetch existing comments ───────────────────────────────────────────────
@@ -1706,7 +1835,15 @@ def cliq_for_testing(tasks: list[dict]) -> None:
         log.info("[Cliq] No tasks in Testing — skipping functional chat notification")
         return
 
-    PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2, "none": 3, "": 3}
+    PRIORITY_ORDER    = {"high": 0, "medium": 1, "low": 2, "none": 3, "": 3}
+    CRITICALITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "": 4}
+
+    def _criticality(t: dict) -> str:
+        """Extract criticality from custom fields (case-insensitive key match)."""
+        for cf in t.get("custom_fields", []) or []:
+            if "critical" in (cf.get("label_name") or cf.get("column_name") or "").lower():
+                return (cf.get("value") or "").strip()
+        return ""
 
     by_project: dict[str, list] = {}
     for t in testing:
@@ -1717,15 +1854,19 @@ def cliq_for_testing(tasks: list[dict]) -> None:
         lines.append(f"━━ {proj} ━━")
         sorted_tasks = sorted(
             by_project[proj],
-            key=lambda t: PRIORITY_ORDER.get((t.get("priority") or "").lower(), 3)
+            key=lambda t: (
+                PRIORITY_ORDER.get((t.get("priority") or "").lower(), 3),
+                CRITICALITY_ORDER.get(_criticality(t).lower(), 4),
+            )
         )
         for t in sorted_tasks:
-            name      = t.get("name", "?")
-            priority  = (t.get("priority") or "None").upper()
-            owners    = ", ".join(task_owner_names(t)) or "Unassigned"
-            due       = t.get("end_date", "No due date")
+            name        = t.get("name", "?")
+            priority    = (t.get("priority") or "None").upper()
+            criticality = _criticality(t) or "—"
+            owners      = ", ".join(task_owner_names(t)) or "Unassigned"
+            due         = t.get("end_date", "No due date")
             lines.append(f"  • {name}")
-            lines.append(f"    Priority: {priority}  |  Owner: {owners}  |  Due: {due}")
+            lines.append(f"    Priority: {priority}  |  Criticality: {criticality}  |  Owner: {owners}  |  Due: {due}")
         lines.append("")
 
     lines.append("Please ensure screenshots, test steps and all required fields are filled before moving to UAT.")
