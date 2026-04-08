@@ -1821,6 +1821,50 @@ async def process_task(
 
 CLIQ_FUNCTIONAL_WEBHOOK = os.getenv("CLIQ_FUNCTIONAL_WEBHOOK", "")   # For Testing list
 CLIQ_STATUS_WEBHOOK     = os.getenv("CLIQ_STATUS_WEBHOOK", "")        # Open/In Progress by project
+CLIQ_ZAPIKEY            = os.getenv("CLIQ_ZAPIKEY", "")               # Bot zapikey for personal DMs
+
+# Managers — receive ALL tasks daily (not just their own)
+MANAGER_EMAILS = {
+    "prabhaa@mithilai.com",
+    "arulk@mithilai.com",
+}
+
+SUBSCRIBERS_FILE = Path(__file__).parent / "subscribers.json"
+
+def load_subscribers() -> list[dict]:
+    try:
+        return json.loads(SUBSCRIBERS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+def save_subscribers(subs: list[dict]) -> None:
+    SUBSCRIBERS_FILE.write_text(json.dumps(subs, indent=2), encoding="utf-8")
+
+def add_subscriber(email: str, name: str) -> bool:
+    """Add a subscriber if not already present. Returns True if newly added."""
+    subs = load_subscribers()
+    emails = {s["email"].lower() for s in subs}
+    if email.lower() in emails:
+        return False
+    subs.append({"email": email, "name": name})
+    save_subscribers(subs)
+    return True
+
+def _cliq_dm(email: str, text: str) -> None:
+    """Send a direct message to a specific user via Zoho Cliq usersbyemail API."""
+    if not CLIQ_ZAPIKEY:
+        log.warning("[Cliq DM] CLIQ_ZAPIKEY not set — cannot send personal DM to %s", email)
+        return
+    url = f"https://cliq.zoho.in/api/v2/usersbyemail/{urllib.parse.quote(email)}/message?zapikey={CLIQ_ZAPIKEY}"
+    payload = json.dumps({"text": text}).encode()
+    req = urllib.request.Request(url, data=payload,
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            r.read()
+        log.info("[Cliq DM] Sent to %s", email)
+    except Exception as e:
+        log.warning("[Cliq DM] Failed to send to %s: %s", email, e)
 
 def _cliq_post(webhook_url: str, text: str) -> None:
     """Post a plain-text message to a Zoho Cliq channel via incoming webhook."""
@@ -2000,6 +2044,148 @@ def cliq_status_update(tasks: list[dict]) -> None:
     _cliq_post(CLIQ_STATUS_WEBHOOK, "\n".join(lines))
 
 
+def _build_personal_dm(tasks: list[dict], name: str) -> str:
+    """Build a personal task update message for a regular subscriber."""
+    name_lower = name.lower()
+    mine = [t for t in tasks
+            if any(name_lower in o.lower() for o in task_owner_names(t))
+            and t.get("status", {}).get("name", "").lower() not in CLOSED_STATUSES]
+
+    today = datetime.now().strftime("%d %b %Y")
+    if not mine:
+        return (f"Good morning *{name}*! 👋\n"
+                f"No active tasks assigned to you today — {today}.\n"
+                f"_MithilAI Agent_")
+
+    in_prog  = [t for t in mine if t.get("status", {}).get("name", "").lower()
+                in {"in progress", "in-progress", "development", "in review", "review"}]
+    testing  = [t for t in mine if t.get("status", {}).get("name", "").lower() in TESTING_STATUSES]
+    open_    = [t for t in mine if t.get("status", {}).get("name", "").lower() in OPEN_STATUSES]
+
+    for grp in (in_prog, testing, open_):
+        grp.sort(key=lambda t: int(t.get("last_updated_time_long") or 0), reverse=True)
+
+    lines = [f"Good morning *{name}*! 👋  —  {today}\n"]
+
+    if in_prog:
+        lines.append(f"*🔵 In Progress ({len(in_prog)})*")
+        for t in in_prog:
+            proj    = t.get("project", {}).get("name", "")
+            pct     = t.get("percent_complete", "0")
+            due     = t.get("end_date", "")
+            flag    = " ⚠ OVERDUE" if is_overdue(t) else ""
+            due_str = f" | Due: {due}" if due else ""
+            lines.append(f"  • {t.get('name','?')} — {proj} ({pct}%){due_str}{flag}")
+
+    if testing:
+        lines.append(f"\n*🧪 In Testing ({len(testing)})*")
+        for t in testing:
+            proj = t.get("project", {}).get("name", "")
+            due  = t.get("end_date", "")
+            lines.append(f"  • {t.get('name','?')} — {proj}" + (f" | Due: {due}" if due else ""))
+
+    if open_:
+        lines.append(f"\n*⬜ Open / Not Started ({len(open_)})*")
+        for t in open_:
+            proj = t.get("project", {}).get("name", "")
+            lines.append(f"  • {t.get('name','?')} — {proj}")
+
+    lines.append(f"\n_MithilAI Agent — {today}_")
+    return "\n".join(lines)
+
+
+def _build_manager_dm(tasks: list[dict], name: str) -> str:
+    """Build a full all-tasks manager report for Prabha / Arul."""
+    today = datetime.now().strftime("%d %b %Y")
+
+    in_prog  = [t for t in tasks if t.get("status", {}).get("name", "").lower()
+                in {"in progress", "in-progress", "development", "in review", "review"}]
+    testing  = [t for t in tasks if t.get("status", {}).get("name", "").lower() in TESTING_STATUSES]
+    overdue  = [t for t in tasks
+                if t.get("status", {}).get("name", "").lower() not in CLOSED_STATUSES
+                and is_overdue(t)]
+    unassign = [t for t in tasks
+                if t.get("status", {}).get("name", "").lower() not in CLOSED_STATUSES
+                and not task_owner_names(t)]
+
+    lines = [f"Good morning *{name}*! 👋  —  Manager Daily Update  —  {today}\n"]
+
+    # In Progress by person
+    if in_prog:
+        by_owner: dict[str, list] = {}
+        for t in in_prog:
+            for o in task_owner_names(t) or ["Unassigned"]:
+                by_owner.setdefault(o, []).append(t)
+        lines.append(f"*🔵 In Progress ({len(in_prog)} tasks)*")
+        for owner in sorted(by_owner):
+            lines.append(f"  ▸ *{owner}*")
+            for t in by_owner[owner]:
+                proj    = t.get("project", {}).get("name", "")
+                pct     = t.get("percent_complete", "0")
+                due     = t.get("end_date", "")
+                flag    = " ⚠" if is_overdue(t) else ""
+                due_str = f" | Due: {due}" if due else ""
+                lines.append(f"    • {t.get('name','?')} — {proj} ({pct}%){due_str}{flag}")
+        lines.append("")
+
+    # In Testing
+    if testing:
+        lines.append(f"*🧪 In Testing ({len(testing)})*")
+        for t in testing:
+            owners = ", ".join(task_owner_names(t)) or "Unassigned"
+            proj   = t.get("project", {}).get("name", "")
+            due    = t.get("end_date", "")
+            lines.append(f"  • {t.get('name','?')} — {proj} | {owners}" + (f" | Due: {due}" if due else ""))
+        lines.append("")
+
+    # Needs attention
+    if overdue:
+        lines.append(f"*⚠ Overdue ({len(overdue)})*")
+        for t in overdue:
+            owners = ", ".join(task_owner_names(t)) or "Unassigned"
+            proj   = t.get("project", {}).get("name", "")
+            lines.append(f"  • {t.get('name','?')} — {proj} | {owners} | Due: {t.get('end_date','?')}")
+        lines.append("")
+
+    if unassign:
+        lines.append(f"*👤 Unassigned ({len(unassign)})*")
+        for t in unassign:
+            proj   = t.get("project", {}).get("name", "")
+            status = t.get("status", {}).get("name", "?")
+            lines.append(f"  • {t.get('name','?')} — {proj} [{status}]")
+        lines.append("")
+
+    total_active = len([t for t in tasks
+                        if t.get("status", {}).get("name", "").lower() not in CLOSED_STATUSES])
+    lines.append(
+        f"📊 *Summary:* {len(in_prog)} in progress  |  {len(testing)} in testing  |  "
+        f"{len(overdue)} overdue  |  {len(unassign)} unassigned  |  {total_active} total active"
+    )
+    lines.append(f"\n_MithilAI Agent — {today}_")
+    return "\n".join(lines)
+
+
+def send_subscriber_dms(tasks: list[dict]) -> None:
+    """Send daily personal DM to every subscriber. Managers get all tasks, others get their own."""
+    subs = load_subscribers()
+    if not subs:
+        log.info("[Cliq DM] No subscribers yet — skipping personal DMs")
+        return
+    log.info("[Cliq DM] Sending personal updates to %d subscriber(s)...", len(subs))
+    for sub in subs:
+        email = sub.get("email", "")
+        name  = sub.get("name", email.split("@")[0])
+        if not email:
+            continue
+        if email.lower() in MANAGER_EMAILS:
+            msg = _build_manager_dm(tasks, name)
+            log.info("[Cliq DM] Manager report → %s", email)
+        else:
+            msg = _build_personal_dm(tasks, name)
+            log.info("[Cliq DM] Personal update → %s", email)
+        _cliq_dm(email, msg)
+
+
 # ── Main Workflow ─────────────────────────────────────────────────────────────
 
 async def run_workflow() -> None:
@@ -2069,6 +2255,9 @@ async def run_workflow() -> None:
 
     log.info("[Cliq] Posting open/in-progress status update to main group...")
     cliq_status_update(tasks)
+
+    log.info("[Cliq] Sending personal DMs to subscribers...")
+    send_subscriber_dms(tasks)
 
     log.info("[Email] Building per-person report...")
     per_person_html = await build_per_person_html(tasks, results, run_time)

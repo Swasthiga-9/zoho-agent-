@@ -31,6 +31,27 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+SUBSCRIBERS_FILE = Path(__file__).parent / "subscribers.json"
+MANAGER_EMAILS   = {"prabhaa@mithilai.com", "arulk@mithilai.com"}
+
+def load_subscribers() -> list[dict]:
+    try:
+        return json.loads(SUBSCRIBERS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+def save_subscribers(subs: list[dict]) -> None:
+    SUBSCRIBERS_FILE.write_text(json.dumps(subs, indent=2), encoding="utf-8")
+
+def add_subscriber(email: str, name: str) -> bool:
+    subs   = load_subscribers()
+    emails = {s["email"].lower() for s in subs}
+    if email.lower() in emails:
+        return False
+    subs.append({"email": email, "name": name})
+    save_subscribers(subs)
+    return True
+
 load_dotenv()
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -334,15 +355,29 @@ def build_help_response() -> str:
     )
 
 
-def build_subscribe_response(sender_name: str) -> str:
+def build_subscribe_response(sender_name: str, sender_email: str, already: bool) -> str:
+    is_manager = sender_email.lower() in MANAGER_EMAILS
+    if already:
+        return (
+            f"👋 Hi *{sender_name}*! You are already subscribed.\n"
+            f"You'll receive your daily update every morning at *8 AM IST*.\n"
+            f"Type *help* to see what else you can ask me."
+        )
+    role_note = (
+        "\nAs a *manager*, you will receive the full team task report — all projects, "
+        "all owners, overdue and unassigned highlights."
+        if is_manager else
+        "\nYou will receive your own task updates every morning."
+    )
     return (
-        f"👋 Hi *{sender_name}*! Welcome to *MithilAI Agent*.\n\n"
-        "I'll send you a daily task status update every morning at *8 AM IST*.\n\n"
+        f"✅ *{sender_name}*, you are now subscribed to MithilAI Agent!\n"
+        f"{role_note}\n\n"
         "You can also ask me anytime:\n"
         "• *my tasks* — your current tasks\n"
         "• *status* — all your task statuses\n"
         "• *@name* — check another team member's tasks\n"
-        "• *help* — full command list"
+        "• *help* — full command list\n\n"
+        "Daily updates start tomorrow at *8 AM IST*."
     )
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
@@ -372,12 +407,14 @@ async def cliq_handler(request: Request):
     # Extract sender
     sender = body.get("sender") or body.get("user") or {}
     if isinstance(sender, str):
-        sender_name = sender
+        sender_name  = sender
+        sender_email = ""
     else:
-        sender_name = (
+        sender_email = sender.get("email") or ""
+        sender_name  = (
             sender.get("display_name") or
             sender.get("name") or
-            (sender.get("email") or "").split("@")[0] or
+            sender_email.split("@")[0] or
             "Team Member"
         )
 
@@ -422,7 +459,8 @@ async def cliq_handler(request: Request):
             response_text = build_user_tasks_response(tasks, arg or sender_name)
 
     elif command == "subscribe":
-        response_text = build_subscribe_response(sender_name)
+        already = not add_subscriber(sender_email, sender_name)
+        response_text = build_subscribe_response(sender_name, sender_email, already)
     else:
         response_text = build_help_response()
 

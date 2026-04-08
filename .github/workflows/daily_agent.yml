@@ -20,6 +20,7 @@ jobs:
       ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
       CLIQ_FUNCTIONAL_WEBHOOK: ${{ secrets.CLIQ_FUNCTIONAL_WEBHOOK }}
       CLIQ_STATUS_WEBHOOK:     ${{ secrets.CLIQ_STATUS_WEBHOOK }}
+      CLIQ_ZAPIKEY:            ${{ secrets.CLIQ_ZAPIKEY }}
       GMAIL_USER:          ${{ secrets.GMAIL_USER }}
       GMAIL_APP_PASSWORD:  ${{ secrets.GMAIL_APP_PASSWORD }}
       EMAIL_TO_1:          ${{ secrets.EMAIL_TO_1 }}
