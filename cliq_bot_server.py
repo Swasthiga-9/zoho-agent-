@@ -363,26 +363,39 @@ async def cliq_handler(request: Request):
     except Exception:
         body = {}
 
-    log.info("[Bot] Incoming: %s", json.dumps(body)[:300])
+    log.info("[Bot] Incoming: %s", json.dumps(body)[:500])
 
-    # Extract sender info — Zoho Cliq sends different shapes
-    sender = body.get("sender", body.get("user", {}))
+    # Zoho Cliq bot webhook payload formats:
+    # { "sender": {"name": ..., "email": ...}, "text": "...", "type": "message" }
+    # or nested under "message" or "payload"
+
+    # Extract sender
+    sender = body.get("sender") or body.get("user") or {}
     if isinstance(sender, str):
         sender_name = sender
     else:
         sender_name = (
             sender.get("display_name") or
             sender.get("name") or
-            sender.get("email", "").split("@")[0] or
+            (sender.get("email") or "").split("@")[0] or
             "Team Member"
         )
 
+    # Extract message text
     text = (
         body.get("text") or
-        body.get("message", {}).get("text") or
+        body.get("message") if isinstance(body.get("message"), str) else None or
+        (body.get("message") or {}).get("text") or
         body.get("payload", {}).get("text") or
         ""
-    ).strip()
+    )
+    if not isinstance(text, str):
+        text = ""
+    text = text.strip()
+
+    # Ignore bot's own messages
+    if body.get("type") in ("bot", "bot_message") or not text:
+        return JSONResponse({"text": ""})
 
     log.info("[Bot] From: %s | Message: %s", sender_name, text)
 

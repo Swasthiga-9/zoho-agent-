@@ -4,6 +4,7 @@ services:
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn cliq_bot_server:app --host 0.0.0.0 --port $PORT
+    plan: free
     envVars:
       - key: ZOHO_PORTAL
         sync: false
@@ -25,3 +26,5 @@ services:
         sync: false
       - key: CLIQ_STATUS_WEBHOOK
         sync: false
+      - key: PORT
+        value: "8000"
