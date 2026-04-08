@@ -174,8 +174,8 @@ def task_line(t: dict) -> str:
 # ── Suggestion buttons ────────────────────────────────────────────────────────
 
 # Zoho Cliq supports "suggestions" — clickable text chips shown below a message
-MAIN_SUGGESTIONS = ["my tasks", "all tasks", "overdue", "in testing", "unassigned", "summary", "help"]
-AFTER_SUBSCRIBE  = ["my tasks", "all tasks", "overdue", "summary", "help"]
+MAIN_SUGGESTIONS = ["my tasks", "all tasks", "overdue", "in testing", "unassigned", "summary", "how to use me", "help"]
+AFTER_SUBSCRIBE  = ["all tasks", "my tasks", "overdue", "summary", "how to use me"]
 
 def cliq_response(text: str, suggestions: list[str] = None) -> dict:
     """Build a Zoho Cliq bot response with optional suggestion chips."""
@@ -204,6 +204,8 @@ def parse_command(text: str) -> tuple[str, str]:
         return "summary", ""
     if t in ("help", "commands", "?", "what can you do"):
         return "help", ""
+    if t in ("how to use me", "how to use", "guide", "tutorial", "get started", "how does this work"):
+        return "guide", ""
     m = re.search(r'@([\w][\w\s]*)', text)
     if m:
         return "user_tasks", m.group(1).strip()
@@ -431,18 +433,53 @@ def build_subscribe(sender_name: str, sender_email: str, already: bool) -> str:
     )
 
 
+def build_guide() -> str:
+    return (
+        "📖 *How to Use MithilAI Agent*\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "*Step 1 — Subscribe*\n"
+        "Type: subscribe\n"
+        "→ You will get the full team task report every morning at 8 AM IST automatically.\n\n"
+        "*Step 2 — Check tasks anytime*\n"
+        "Just tap one of the suggestion buttons below, or type any of these:\n\n"
+        "┌─────────────────────────────────────\n"
+        "│ all tasks    → Full team report (all projects, all owners)\n"
+        "│ my tasks     → Only tasks assigned to you\n"
+        "│ overdue      → All tasks past their due date\n"
+        "│ in testing   → Tasks currently in QA / For Testing\n"
+        "│ unassigned   → Tasks with no owner assigned\n"
+        "│ summary      → Quick count + workload by person\n"
+        "│ @Name        → Tasks for a specific team member\n"
+        "│               e.g. @Dhinesh or @Siva\n"
+        "└─────────────────────────────────────\n\n"
+        "*Step 3 — Daily updates*\n"
+        "Every morning at *8 AM IST* you will automatically receive:\n"
+        "• Full team task report\n"
+        "• In Progress tasks by person\n"
+        "• In Testing list\n"
+        "• Overdue & unassigned alerts\n"
+        "• Team summary counts\n\n"
+        "*Tips:*\n"
+        "• You do not need to type exactly — just tap the suggestion buttons\n"
+        "• The bot reads live data from Zoho Projects every time you ask\n"
+        "• Overdue tasks are marked with ⚠\n\n"
+        "_MithilAI Agent — your daily Zoho Projects assistant_"
+    )
+
+
 def build_help() -> str:
     return (
-        "🤖 *MithilAI Agent — Commands*\n\n"
-        "• *all tasks* — full team task report\n"
-        "• *my tasks* — only your assigned tasks\n"
-        "• *overdue* — all tasks past due date\n"
-        "• *in testing* — tasks currently in QA/testing\n"
-        "• *unassigned* — tasks with no owner\n"
-        "• *summary* — quick count + per-person workload\n"
-        "• *@name* — tasks for a specific person\n"
-        "• *subscribe* — sign up for daily 8 AM updates\n\n"
-        "Daily updates are sent automatically every morning at *8 AM IST*."
+        "🤖 *MithilAI Agent — Quick Commands*\n\n"
+        "• *subscribe*      — get daily team updates at 8 AM IST\n"
+        "• *all tasks*      — full team task report\n"
+        "• *my tasks*       — only your tasks\n"
+        "• *overdue*        — tasks past due date\n"
+        "• *in testing*     — tasks in QA / testing\n"
+        "• *unassigned*     — tasks with no owner\n"
+        "• *summary*        — counts + workload per person\n"
+        "• *@name*          — tasks for a specific person\n"
+        "• *how to use me*  — full usage guide\n\n"
+        "_Tap any suggestion button below to get started._"
     )
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
@@ -539,6 +576,10 @@ async def cliq_handler(request: Request):
 
     elif command == "user_tasks":
         msg = build_user_tasks(tasks, arg or sender_name)
+        return JSONResponse(cliq_response(msg, MAIN_SUGGESTIONS))
+
+    elif command == "guide":
+        msg = build_guide()
         return JSONResponse(cliq_response(msg, MAIN_SUGGESTIONS))
 
     else:
