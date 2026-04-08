@@ -637,6 +637,9 @@ def determine_comment_type(
     if status in TESTING_STATUSES:
         last_status = last_bot_commented_status(comments)
         if last_status in TESTING_STATUSES and not human_replied:
+            # If stuck in testing for 7+ days with no human reply — force replan
+            if days_in_progress >= 7:
+                return "replan"
             return None   # already checked during this testing cycle
         return "testing_check"
 
@@ -1810,6 +1813,13 @@ async def process_task(
         )
         send_escalation_email(task, reason, days_in, keywords_found, owners)
         actions.append("escalation_email")
+
+    # ── Overdue escalation email (3+ days overdue, not already escalated) ────
+    if is_overdue(task) and days_in >= 3 and "escalation_email" not in actions:
+        overdue_reason = f"Task is overdue by {days_in:.0f} day(s) with no resolution."
+        send_escalation_email(task, overdue_reason, days_in, keywords_found, owners)
+        actions.append("overdue_escalation_email")
+        log.info("  Overdue escalation email sent")
 
     log.info("  Actions: %s", ", ".join(actions))
     base_result["actions"] = actions

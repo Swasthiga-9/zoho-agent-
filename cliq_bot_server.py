@@ -174,8 +174,8 @@ def task_line(t: dict) -> str:
 # ── Suggestion buttons ────────────────────────────────────────────────────────
 
 # Zoho Cliq supports "suggestions" — clickable text chips shown below a message
-MAIN_SUGGESTIONS = ["my tasks", "all tasks", "overdue", "in testing", "unassigned", "summary", "how to use me", "help"]
-AFTER_SUBSCRIBE  = ["all tasks", "my tasks", "overdue", "summary", "how to use me"]
+MAIN_SUGGESTIONS = ["my tasks", "my overdue", "all tasks", "overdue", "in testing", "unassigned", "summary", "how to use me"]
+AFTER_SUBSCRIBE  = ["all tasks", "my tasks", "my overdue", "overdue", "summary", "how to use me"]
 
 def cliq_response(text: str, suggestions: list[str] = None) -> dict:
     """Build a Zoho Cliq bot response with optional suggestion chips."""
@@ -196,6 +196,8 @@ def parse_command(text: str) -> tuple[str, str]:
         return "all_tasks", ""
     if t in ("overdue", "overdue tasks", "late", "delayed"):
         return "overdue", ""
+    if t in ("my overdue", "my late tasks", "my delayed"):
+        return "my_overdue", ""
     if t in ("in testing", "testing", "for testing", "qa", "test"):
         return "testing", ""
     if t in ("unassigned", "no owner", "not assigned"):
@@ -399,6 +401,23 @@ def build_summary(tasks: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def build_my_overdue(tasks: list[dict], sender_name: str) -> str:
+    name_lower = sender_name.lower()
+    mine = [t for t in tasks
+            if any(name_lower in o.lower() for o in owner_names(t))
+            and t_status(t).lower() not in CLOSED_STATUSES
+            and is_overdue(t)]
+    today = datetime.now().strftime("%d %b %Y")
+    if not mine:
+        return f"✅ *{sender_name}* — no overdue tasks as of {today}. Keep it up!"
+    mine.sort(key=lambda t: t.get("end_date", ""))
+    lines = [f"⚠ *My Overdue Tasks — {sender_name}* — {today}\n"]
+    for t in mine:
+        lines.append(task_line(t))
+    lines.append(f"\n_MithilAI Agent — {today}_")
+    return "\n".join(lines)
+
+
 def build_user_tasks(tasks: list[dict], target_name: str) -> str:
     name_lower = target_name.lower()
     theirs = [t for t in tasks
@@ -445,7 +464,8 @@ def build_guide() -> str:
         "┌─────────────────────────────────────\n"
         "│ all tasks    → Full team report (all projects, all owners)\n"
         "│ my tasks     → Only tasks assigned to you\n"
-        "│ overdue      → All tasks past their due date\n"
+        "│ my overdue   → Only your overdue tasks\n"
+        "│ overdue      → All overdue tasks across the team\n"
         "│ in testing   → Tasks currently in QA / For Testing\n"
         "│ unassigned   → Tasks with no owner assigned\n"
         "│ summary      → Quick count + workload by person\n"
@@ -530,8 +550,8 @@ async def cliq_handler(request: Request):
     command, arg = parse_command(text)
 
     # Commands that need task data
-    needs_tasks = command in ("all_tasks", "my_tasks", "overdue", "testing",
-                              "unassigned", "summary", "user_tasks")
+    needs_tasks = command in ("all_tasks", "my_tasks", "overdue", "my_overdue",
+                              "testing", "unassigned", "summary", "user_tasks")
     tasks = []
     if needs_tasks:
         try:
@@ -560,6 +580,10 @@ async def cliq_handler(request: Request):
 
     elif command == "overdue":
         msg = build_overdue(tasks)
+        return JSONResponse(cliq_response(msg, MAIN_SUGGESTIONS))
+
+    elif command == "my_overdue":
+        msg = build_my_overdue(tasks, sender_name)
         return JSONResponse(cliq_response(msg, MAIN_SUGGESTIONS))
 
     elif command == "testing":

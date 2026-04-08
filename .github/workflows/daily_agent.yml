@@ -2,7 +2,7 @@ name: Zoho Projects Daily Agent
 
 on:
   schedule:
-    - cron: '30 2 * * *'   # 2:30 AM UTC = 8:00 AM IST every day
+    - cron: '30 2 * * 1-5'   # 2:30 AM UTC = 8:00 AM IST — weekdays only (Mon-Fri)
   workflow_dispatch:         # allows manual trigger from GitHub UI
 
 jobs:
