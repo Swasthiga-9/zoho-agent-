@@ -2166,23 +2166,19 @@ def _build_manager_dm(tasks: list[dict], name: str) -> str:
 
 
 def send_subscriber_dms(tasks: list[dict]) -> None:
-    """Send daily personal DM to every subscriber. Managers get all tasks, others get their own."""
+    """Send full team daily report to every subscriber."""
     subs = load_subscribers()
     if not subs:
         log.info("[Cliq DM] No subscribers yet — skipping personal DMs")
         return
-    log.info("[Cliq DM] Sending personal updates to %d subscriber(s)...", len(subs))
+    log.info("[Cliq DM] Sending team report to %d subscriber(s)...", len(subs))
     for sub in subs:
         email = sub.get("email", "")
         name  = sub.get("name", email.split("@")[0])
         if not email:
             continue
-        if email.lower() in MANAGER_EMAILS:
-            msg = _build_manager_dm(tasks, name)
-            log.info("[Cliq DM] Manager report → %s", email)
-        else:
-            msg = _build_personal_dm(tasks, name)
-            log.info("[Cliq DM] Personal update → %s", email)
+        msg = _build_manager_dm(tasks, name)
+        log.info("[Cliq DM] Team report → %s", email)
         _cliq_dm(email, msg)
 
 
