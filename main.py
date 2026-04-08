@@ -1892,39 +1892,111 @@ def cliq_for_testing(tasks: list[dict]) -> None:
 
 
 def cliq_status_update(tasks: list[dict]) -> None:
-    """Post open + in-progress tasks grouped by project to the status/main group chat."""
+    """Post manager-focused daily status to the status/main group chat.
+    Shows only In Progress tasks + flags overdue, unassigned, and no-update tasks."""
     if not CLIQ_STATUS_WEBHOOK:
         log.info("[Cliq] CLIQ_STATUS_WEBHOOK not set — skipping status update notification")
         return
 
-    ACTIVE = {"open", "in progress", "not started", "to do", "todo", "new",
-              "in review", "review", "development", "in development"}
+    IN_PROGRESS = {"in progress", "in-progress", "development", "in development",
+                   "in review", "review", "working"}
 
-    active = [
+    in_prog = [
         t for t in tasks
-        if t.get("status", {}).get("name", "").lower() in ACTIVE
+        if t.get("status", {}).get("name", "").lower() in IN_PROGRESS
     ]
-    if not active:
-        log.info("[Cliq] No open/in-progress tasks — skipping status update")
-        return
 
-    by_project: dict[str, list] = {}
-    for t in active:
-        by_project.setdefault(t.get("project", {}).get("name", "?"), []).append(t)
+    # Manager attention lists
+    overdue_tasks     = [t for t in tasks
+                         if t.get("status", {}).get("name", "").lower() not in CLOSED_STATUSES
+                         and is_overdue(t)]
+    unassigned_tasks  = [t for t in tasks
+                         if t.get("status", {}).get("name", "").lower() not in CLOSED_STATUSES
+                         and not task_owner_names(t)]
+    stale_tasks       = []
+    for t in tasks:
+        if t.get("status", {}).get("name", "").lower() in CLOSED_STATUSES:
+            continue
+        updated_ts = t.get("last_updated_time_long") or t.get("updated_time_long") or 0
+        try:
+            updated_ts = int(updated_ts)
+        except Exception:
+            updated_ts = 0
+        if updated_ts:
+            days_no_update = (datetime.now().timestamp() - updated_ts / 1000) / 86400
+            if days_no_update >= 3:
+                stale_tasks.append((t, round(days_no_update)))
 
-    lines = [f"📋 *Daily Status Update — {datetime.now().strftime('%d %b %Y')}*\n"]
-    for proj in sorted(by_project):
-        ptasks = by_project[proj]
-        lines.append(f"*{proj}* ({len(ptasks)} task(s))")
-        for t in ptasks:
-            name    = t.get("name", "?")
-            status  = t.get("status", {}).get("name", "?")
-            owners  = ", ".join(task_owner_names(t)) or "Unassigned"
-            pct     = t.get("percent_complete", "0")
-            lines.append(f"  • [{status}] {name} — {owners} ({pct}%)")
+    today = datetime.now().strftime("%d %b %Y")
+    lines = [f"📋 *Daily Manager Update — {today}*\n"]
+
+    # ── Section 1: In Progress tasks by project ───────────────────────────────
+    if in_prog:
+        by_project: dict[str, list] = {}
+        for t in in_prog:
+            by_project.setdefault(t.get("project", {}).get("name", "?"), []).append(t)
+
+        lines.append("*🔵 In Progress*")
+        for proj in sorted(by_project):
+            lines.append(f"  ▸ *{proj}*")
+            for t in by_project[proj]:
+                name   = t.get("name", "?")
+                owners = ", ".join(task_owner_names(t)) or "Unassigned"
+                pct    = t.get("percent_complete", "0")
+                due    = t.get("end_date", "")
+                flag   = " ⚠ OVERDUE" if is_overdue(t) else ""
+                due_str = f" | Due: {due}" if due else ""
+                lines.append(f"    • {name} — {owners} ({pct}%){due_str}{flag}")
+        lines.append("")
+    else:
+        lines.append("*🔵 In Progress* — No tasks currently in progress\n")
+
+    # ── Section 2: Needs Attention ────────────────────────────────────────────
+    attention = []
+
+    if overdue_tasks:
+        attention.append(f"⚠ *Overdue Tasks ({len(overdue_tasks)})*")
+        for t in overdue_tasks:
+            name   = t.get("name", "?")
+            proj   = t.get("project", {}).get("name", "?")
+            owners = ", ".join(task_owner_names(t)) or "Unassigned"
+            due    = t.get("end_date", "?")
+            attention.append(f"  • {name} — {proj} | Owner: {owners} | Due: {due}")
+
+    if unassigned_tasks:
+        attention.append(f"\n👤 *Unassigned Tasks ({len(unassigned_tasks)})*")
+        for t in unassigned_tasks:
+            name   = t.get("name", "?")
+            proj   = t.get("project", {}).get("name", "?")
+            status = t.get("status", {}).get("name", "?")
+            attention.append(f"  • {name} — {proj} [{status}]")
+
+    if stale_tasks:
+        attention.append(f"\n🕐 *No Update for 3+ Days ({len(stale_tasks)})*")
+        for t, days in stale_tasks[:8]:   # cap at 8 to keep message short
+            name   = t.get("name", "?")
+            proj   = t.get("project", {}).get("name", "?")
+            owners = ", ".join(task_owner_names(t)) or "Unassigned"
+            attention.append(f"  • {name} — {proj} | {owners} | {days}d no update")
+
+    if attention:
+        lines.append("*🚨 Needs Attention*")
+        lines.extend(attention)
         lines.append("")
 
-    lines.append("_MithilAI Agent — automated daily update_")
+    # ── Section 3: Quick summary numbers ─────────────────────────────────────
+    total_active = len([t for t in tasks
+                        if t.get("status", {}).get("name", "").lower() not in CLOSED_STATUSES])
+    total_testing = len([t for t in tasks
+                         if t.get("status", {}).get("name", "").lower() in TESTING_STATUSES])
+    lines.append(
+        f"📊 *Summary:* {len(in_prog)} in progress  |  "
+        f"{total_testing} in testing  |  "
+        f"{len(overdue_tasks)} overdue  |  "
+        f"{len(unassigned_tasks)} unassigned  |  "
+        f"{total_active} total active"
+    )
+    lines.append(f"\n_MithilAI Agent — automated daily update — {today}_")
     _cliq_post(CLIQ_STATUS_WEBHOOK, "\n".join(lines))
 
 
