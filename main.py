@@ -141,6 +141,21 @@ def _on(t: dict) -> list[str]:
     return [o.get("name") or o.get("full_name", "") for o in raw
             if isinstance(o, dict) and (o.get("name") or o.get("full_name"))]
 
+def build_owner_tag(task: dict) -> str:
+    """Build an @mention tag line for all task owners using Zoho Projects mention format."""
+    raw = (task.get("details") or {}).get("owners") or task.get("owners") or task.get("owner") or []
+    tags = []
+    for o in raw:
+        if not isinstance(o, dict):
+            continue
+        uid  = o.get("id") or o.get("user_id") or ""
+        name = o.get("name") or o.get("full_name") or ""
+        if uid and name:
+            tags.append(f'<a href="javascript:void(0)">@{name}</a>')
+        elif name:
+            tags.append(f"@{name}")
+    return " ".join(tags)
+
 # ── Token refresh ─────────────────────────────────────────────────────────────
 
 def refresh_access_token() -> str:
@@ -852,7 +867,7 @@ Your response must be exactly this JSON (no markdown, no code fences, no extra k
   ],
   "uat_scenarios": [
     "compact scenario -> expected result  (e.g. '106 received on PO 100 -> block')",
-    "... 8-12 scenarios covering happy path, boundary, rejection, edge cases, integration"
+    "... exactly 5 scenarios — pick only the most critical ones that cover the core rule, one boundary case, and one rejection/block case"
   ],
   "clarification_questions": [
     "Question that is NOT already answered and NOT about Classic/UAT-signoff/client specifics?",
@@ -877,9 +892,10 @@ Your response must be exactly this JSON (no markdown, no code fences, no extra k
 }
 
 UAT scenario format rules:
+- Exactly 5 scenarios — no more, no less
 - One compact line per scenario using ->  e.g. "106 received on PO 100 -> block"
 - Use real values and field names from the task description where possible
-- Cover: happy path, boundary values, block/reject cases, edge cases, integration trigger
+- Pick the 5 most important: 1 happy path, 1 boundary value, 1 block/reject, 1 edge case, 1 integration or update scenario
 - No explanatory sentences — just condition -> result
 
 Return valid JSON only — no markdown, no extra text."""
@@ -1754,7 +1770,9 @@ async def process_task(
         log.info("  [BPM] Calling Claude Opus 4.6 for ERP/BPM analysis...")
         bpm_sections = await analyse_bpm_task(task, comments, days_in)
         log.info("  [BPM] Summary: %s", bpm_sections.get("summary", ""))
-        html_comment  = box_bpm_analysis(bpm_sections, priority)
+        owner_tag    = build_owner_tag(task)
+        tag_prefix   = f"{owner_tag}<br>" if owner_tag else ""
+        html_comment  = tag_prefix + box_bpm_analysis(bpm_sections, priority)
         html_comment += f'<!--zs:{status_nm.lower()}-->'
         posted = await post_comment(client, project_id, task_id, html_comment)
         actions.append("bpm_analysis" if posted else "comment_failed")
