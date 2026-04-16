@@ -198,6 +198,8 @@ def parse_command(text: str) -> tuple[str, str]:
         return "overdue", ""
     if t in ("my overdue", "my late tasks", "my delayed"):
         return "my_overdue", ""
+    if t in ("refresh", "update", "today", "latest", "now"):
+        return "refresh", ""
     if t in ("in testing", "testing", "for testing", "qa", "test"):
         return "testing", ""
     if t in ("unassigned", "no owner", "not assigned"):
@@ -551,7 +553,8 @@ async def cliq_handler(request: Request):
 
     # Commands that need task data
     needs_tasks = command in ("all_tasks", "my_tasks", "overdue", "my_overdue",
-                              "testing", "unassigned", "summary", "user_tasks")
+                              "testing", "unassigned", "summary", "user_tasks",
+                              "subscribe", "refresh", "today")
     tasks = []
     if needs_tasks:
         try:
@@ -566,8 +569,11 @@ async def cliq_handler(request: Request):
 
     # Build response
     if command == "subscribe":
-        already  = not add_subscriber(sender_email, sender_name)
-        msg      = build_subscribe(sender_name, sender_email, already)
+        already = not add_subscriber(sender_email, sender_name)
+        welcome = build_subscribe(sender_name, sender_email, already)
+        # Immediately send full team report after subscribe
+        team_report = build_all_tasks(tasks, sender_name)
+        msg = welcome + "\n\n━━━━━━━━━━━━━━━━━━━━━━\n\n" + team_report
         return JSONResponse(cliq_response(msg, AFTER_SUBSCRIBE))
 
     elif command == "all_tasks":
@@ -600,6 +606,10 @@ async def cliq_handler(request: Request):
 
     elif command == "user_tasks":
         msg = build_user_tasks(tasks, arg or sender_name)
+        return JSONResponse(cliq_response(msg, MAIN_SUGGESTIONS))
+
+    elif command == "refresh":
+        msg = build_all_tasks(tasks, sender_name)
         return JSONResponse(cliq_response(msg, MAIN_SUGGESTIONS))
 
     elif command == "guide":
