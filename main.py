@@ -1832,6 +1832,8 @@ async def process_task(
 CLIQ_FUNCTIONAL_WEBHOOK = os.getenv("CLIQ_FUNCTIONAL_WEBHOOK", "")   # For Testing list
 CLIQ_STATUS_WEBHOOK     = os.getenv("CLIQ_STATUS_WEBHOOK", "")        # Open/In Progress by project
 CLIQ_ZAPIKEY            = os.getenv("CLIQ_ZAPIKEY", "")               # Bot zapikey for personal DMs
+SUPABASE_URL            = os.getenv("SUPABASE_URL", "").rstrip("/")
+SUPABASE_KEY            = os.getenv("SUPABASE_KEY", "")
 
 # Managers — receive ALL tasks daily (not just their own)
 MANAGER_EMAILS = {
@@ -1841,7 +1843,25 @@ MANAGER_EMAILS = {
 
 SUBSCRIBERS_FILE = Path(__file__).parent / "subscribers.json"
 
+def _supa_headers() -> dict:
+    return {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+    }
+
 def load_subscribers() -> list[dict]:
+    """Load from Supabase if configured, else fall back to local JSON."""
+    if SUPABASE_URL and SUPABASE_KEY:
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/subscribers?select=email,name"
+            req = urllib.request.Request(url, headers=_supa_headers())
+            with urllib.request.urlopen(req, timeout=10) as r:
+                subs = json.loads(r.read().decode())
+            log.info("[Subscribers] Loaded %d from Supabase", len(subs))
+            return subs
+        except Exception as e:
+            log.warning("[Subscribers] Supabase load failed, using local: %s", e)
     try:
         return json.loads(SUBSCRIBERS_FILE.read_text(encoding="utf-8"))
     except Exception:
