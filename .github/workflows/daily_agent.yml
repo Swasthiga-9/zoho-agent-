@@ -29,6 +29,8 @@ jobs:
       DHINESH_EMAIL:       ${{ secrets.DHINESH_EMAIL }}
       SIVA_TEAM:           ${{ secrets.SIVA_TEAM }}
       DHINESH_TEAM:        ${{ secrets.DHINESH_TEAM }}
+      SUPABASE_URL:        ${{ secrets.SUPABASE_URL }}
+      SUPABASE_KEY:        ${{ secrets.SUPABASE_KEY }}
       ESCALATION_DAYS:     "7"
       BOT_COOLDOWN_HOURS:  "24"
       NO_REPLY_HOURS:      "48"
