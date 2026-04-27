@@ -94,17 +94,7 @@ _EMAIL_CC = [e for e in [
 if not _EMAIL_TO:
     _EMAIL_TO = [e for e in [SIVA_EMAIL, DHINESH_EMAIL] if e]
 
-# Password: try Windows Credential Manager first, fall back to GMAIL_APP_PASSWORD env var
-try:
-    _keyring_pass = keyring.get_password("zoho_agent_gmail", "gmail_app_password") or ""
-except Exception:
-    _keyring_pass = ""
-GMAIL_PASS = (_keyring_pass or os.getenv("GMAIL_APP_PASSWORD", "")).strip()
-if not GMAIL_PASS:
-    log.warning("[Email] No Gmail password found. "
-                "On Windows run 'python setup_email.py'. "
-                "On GitHub Actions set GMAIL_APP_PASSWORD secret.")
-EMAIL_ENABLED = bool(GMAIL_USER and GMAIL_PASS and _EMAIL_TO)
+EMAIL_ENABLED = False  # email escalations disabled
 
 # Team membership — comma-separated first names or full names (case-insensitive)
 SIVA_TEAM    = [n.strip().lower() for n in os.getenv("SIVA_TEAM", "").split(",") if n.strip()]
