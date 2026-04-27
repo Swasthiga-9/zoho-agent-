@@ -1171,7 +1171,7 @@ def send_escalation_email(
             server.sendmail(GMAIL_USER, all_rcpt, msg.as_string())
         log.info("[Email] Escalation sent → To:%s", ", ".join(esc_to))
     except Exception as e:
-        log.error("[Email] Escalation failed: %s", e)
+        log.warning("[Email] Escalation failed: %s", e)
 
 # ── Unassigned task: find best candidate & send email ────────────────────
 
@@ -1298,7 +1298,7 @@ def send_unassigned_task_email(
         log.info("[Email] Unassigned task email sent to %s (%s) for '%s'",
                  candidate_name, candidate_email, task_name)
     except Exception as e:
-        log.error("[Email] Unassigned task email failed for '%s': %s", task_name, e)
+        log.warning("[Email] Unassigned task email failed for '%s': %s", task_name, e)
 
 
 async def handle_unassigned_tasks(all_tasks: list[dict], users: list[dict]) -> None:
@@ -1773,6 +1773,24 @@ async def process_task(
         log.info("  [BPM] Calling Claude Opus 4.6 for ERP/BPM analysis...")
         bpm_sections = await analyse_bpm_task(task, comments, days_in)
         log.info("  [BPM] Summary: %s", bpm_sections.get("summary", ""))
+
+        # If Claude is unavailable/failed, fall back to OpenAI analytics comment
+        if bpm_sections.get("summary", "").startswith("BPM task —"):
+            log.info("  [BPM] Claude unavailable — falling back to OpenAI analytics comment")
+            plan     = await analyse_task(task, comments, human_replies, days_in, "analytics", no_reply_escalation)
+            box_fn   = COMMENT_TYPE_BOX["analytics"]
+            owner_tag = build_owner_tag(task)
+            tag_prefix = f"{owner_tag}<br>" if owner_tag else ""
+            html_comment  = tag_prefix + box_fn(plan.get("comment_text", ""), priority)
+            html_comment += f'<!--zs:{status_nm.lower()}-->'
+            posted = await post_comment(client, project_id, task_id, html_comment)
+            actions.append("analytics" if posted else "comment_failed")
+            log.info("  Actions: %s", ", ".join(actions))
+            base_result["actions"] = actions
+            base_result["summary"] = plan.get("summary", "")
+            base_result["owners"]  = owners
+            return base_result
+
         owner_tag    = build_owner_tag(task)
         tag_prefix   = f"{owner_tag}<br>" if owner_tag else ""
         html_comment  = tag_prefix + box_bpm_analysis(bpm_sections, priority)
