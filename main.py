@@ -218,17 +218,21 @@ async def zoho_put(client: httpx.AsyncClient, path: str, data: dict) -> dict:
 _portal_users: list[dict] = []   # cached after first fetch
 
 async def fetch_portal_users(client: httpx.AsyncClient) -> list[dict]:
-    """Fetch all portal users once; cache result."""
+    """Fetch all portal users once; cache result. Tries admin scope first, falls back to default."""
     global _portal_users
     if _portal_users:
         return _portal_users
-    try:
-        data = await zoho_get(client, "/users/?type=allusers")
-        _portal_users = data.get("users", [])
-        log.info("[Users] Loaded %d portal users", len(_portal_users))
-    except Exception as e:
-        log.warning("[Users] Could not fetch portal users: %s", e)
-        _portal_users = []
+    for endpoint in ("/users/?type=allusers", "/users/"):
+        try:
+            data = await zoho_get(client, endpoint)
+            _portal_users = data.get("users", [])
+            if _portal_users:
+                log.info("[Users] Loaded %d portal users via %s", len(_portal_users), endpoint)
+                return _portal_users
+        except Exception:
+            pass
+    log.info("[Users] Portal users unavailable — will proceed without member list")
+    _portal_users = []
     return _portal_users
 
 def find_user_by_name(users: list[dict], name: str) -> dict | None:
