@@ -334,6 +334,69 @@ async def post_comment(client: httpx.AsyncClient, project_id: str, task_id: str,
         log.warning("[Zoho] Could not post comment on task %s — %s", task_id, e)
         return False
 
+async def post_notification(client: httpx.AsyncClient, project_id: str, task_id: str, content: str) -> bool:
+    """Post a brief notification for non-high-priority tasks (notify=true triggers Zoho bell notifications)."""
+    try:
+        await zoho_post(client, f"/projects/{project_id}/tasks/{task_id}/comments/",
+                        {"content": content, "notify": "true"})
+        log.info("[Zoho] Notification posted on task %s", task_id)
+        return True
+    except Exception as e:
+        log.warning("[Zoho] Could not post notification on task %s — %s", task_id, e)
+        return False
+
+def build_brief_notification(task: dict, comment_type: str, status_nm: str) -> str:
+    """Build a brief plain-text notification for non-high-priority tasks (no AI needed)."""
+    task_name   = task.get("name", task.get("id", ""))
+    priority    = (task.get("priority") or "none").title()
+    due_date    = task.get("end_date", "—")
+    overdue     = is_overdue(task)
+    days_in     = round(days_since(task.get("created_time_long")), 1)
+    owners_list = task_owner_names(task)
+    owner_str   = ", ".join(owners_list) if owners_list else "Unassigned"
+    ts          = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    if comment_type == "missing_info":
+        missing = []
+        if not owners_list:
+            missing.append("owner")
+        if not task.get("end_date"):
+            missing.append("due date")
+        desc = re.sub(r'<[^>]+>', '', task.get("description", "")).strip()
+        if len(desc) < 10:
+            missing.append("description")
+        missing_str = ", ".join(missing) if missing else "required details"
+        return (
+            f"⚠ Task Notification — {task_name}\n"
+            f"Missing: {missing_str}\n"
+            f"Owner: {owner_str} | Status: {status_nm}\n"
+            f"Please update the task with the required information.\n"
+            f"{BOT_MARKER} {ts}"
+        )
+    if comment_type == "replan":
+        overdue_note = f" — OVERDUE by {days_in:.0f} day(s)" if overdue else ""
+        return (
+            f"\U0001f534 Task Notification — {task_name}{overdue_note}\n"
+            f"Status: {status_nm} | Owner: {owner_str}\n"
+            f"Action required: please review and update the plan.\n"
+            f"{BOT_MARKER} {ts}"
+        )
+    if comment_type == "feedback_ack":
+        return (
+            f"✅ Task Notification — {task_name}\n"
+            f"Reply received. Status: {status_nm} | Owner: {owner_str}\n"
+            f"Please continue with the next steps.\n"
+            f"{BOT_MARKER} {ts}"
+        )
+    # analytics / digest / default
+    overdue_note = " ⚠ OVERDUE" if overdue else ""
+    return (
+        f"\U0001f514 Task Notification — {task_name}\n"
+        f"Status: {status_nm}{overdue_note} | Priority: {priority} | Due: {due_date}\n"
+        f"Owner: {owner_str} | In progress for {days_in:.0f} day(s).\n"
+        f"{BOT_MARKER} {ts}"
+    )
+
 # ── Task auto-assignment ──────────────────────────────────────────────────────
 
 async def assign_task(client: httpx.AsyncClient, project_id: str, task_id: str, user_id: str) -> bool:
@@ -1306,7 +1369,8 @@ async def handle_unassigned_tasks(all_tasks: list[dict], users: list[dict]) -> N
 # ── Daily report email ────────────────────────────────────────────────────────
 
 ACTION_LABEL = {
-    "missing_info":      ("Follow-up Required",      "#f59e0b"),
+    "notified":          ("Notification Sent",        "#6366f1"),
+    "missing_info":      ("Follow-up Required",       "#f59e0b"),
     "feedback_ack":      ("Reply Acknowledged",      "#10b981"),
     "analytics":         ("Analytics Posted",        "#0ea5e9"),
     "replan":            ("Replan Suggested",        "#ef4444"),
@@ -1401,10 +1465,10 @@ async def build_per_person_html(tasks: list[dict], results: list[dict], run_time
     SC = {"open":"#3b82f6","in progress":"#0ea5e9","not started":"#6b7280","on hold":"#f59e0b",
           "closed":"#22c55e","completed":"#22c55e","ready for uat":"#8b5cf6",
           "uat":"#8b5cf6","done":"#22c55e"}
-    AL = {"missing_info":"#f59e0b","feedback_ack":"#10b981",
+    AL = {"notified":"#6366f1","missing_info":"#f59e0b","feedback_ack":"#10b981",
           "analytics":"#0ea5e9","replan":"#ef4444","digest":"#6b7280",
           "escalation_email":"#dc2626","comment_failed":"#ef4444"}
-    LL = {"missing_info":"Follow-up","feedback_ack":"Reply Ack",
+    LL = {"notified":"Notified","missing_info":"Follow-up","feedback_ack":"Reply Ack",
           "analytics":"Analytics","replan":"Replan","digest":"Digest",
           "escalation_email":"Escalated","comment_failed":"Failed"}
 
@@ -1781,17 +1845,34 @@ async def process_task(
         base_result["owners"]  = owners
         return base_result
 
-    # ── Standard tasks: use OpenAI GPT-4o ────────────────────────────────────
+    # ── Standard tasks ────────────────────────────────────────────────────────
+
+    # ── Non-high priority: brief notification, no AI call ────────────────────
+    if priority.lower() != "high":
+        owner_tag  = build_owner_tag(task)
+        notif_text = build_brief_notification(task, comment_type, status_nm)
+        if owner_tag:
+            notif_text = owner_tag + "\n" + notif_text
+        notif_text += f'<!--zs:{status_nm.lower()}-->'
+        posted = await post_notification(client, project_id, task_id, notif_text)
+        actions.append("notified" if posted else "comment_failed")
+        log.info("  Actions: %s", ", ".join(actions))
+        base_result["actions"] = actions
+        base_result["summary"] = f"Notification — {status_nm} ({priority}, {comment_type})"
+        base_result["owners"]  = owners
+        return base_result
+
+    # ── High priority: full AI analysis + HTML comment ────────────────────────
     box_fn = COMMENT_TYPE_BOX[comment_type]
 
-    # ── AI analysis ───────────────────────────────────────────────────────────
     plan = await analyse_task(
         task, comments, human_replies, days_in, comment_type, no_reply_escalation
     )
     log.info("  Summary: %s", plan.get("summary", ""))
 
-    # ── Post comment (embed status marker so we can detect same-status on next run) ──
-    html_comment = box_fn(plan.get("comment_text", ""), priority)
+    owner_tag    = build_owner_tag(task)
+    tag_prefix   = f"{owner_tag}<br>" if owner_tag else ""
+    html_comment  = tag_prefix + box_fn(plan.get("comment_text", ""), priority)
     html_comment += f'<!--zs:{status_nm.lower()}-->'
     posted = await post_comment(client, project_id, task_id, html_comment)
     actions.append(comment_type if posted else "comment_failed")
