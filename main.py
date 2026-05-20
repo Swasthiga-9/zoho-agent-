@@ -8,7 +8,7 @@ Features:
   2. Feedback loop  — reads human replies to bot questions; upgrades/downgrades comment type
   3. Smart routing  — escalation emails go to Siva OR Dhinesh based on task owner team
   4. Auto-assign    — unassigned tasks are assigned to the configured default person
-  5. Comment types  — new_task / missing_info / analytics / replan / digest
+  5. Comment types  — missing_info / analytics / replan / digest
   6. Daily HTML report email sent after every run
 
 Config: edit .env  |  Logs: logs/agent.log  |  Schedule: setup_scheduler.py
@@ -375,9 +375,6 @@ def html_box(label: str, icon: str, bg: str, border: str, body: str, priority: s
         f'</div>'
     )
 
-def box_new_task(text: str, priority: str = "none") -> str:
-    return html_box("New Task — Onboarding Check-in", "&#128221;", "#f0fdf4", "#16a34a", text, priority)
-
 def box_missing_info(text: str, priority: str = "none") -> str:
     return html_box("Check-in Required", "&#128269;", "#fff8e1", "#f59e0b", text, priority)
 
@@ -484,7 +481,6 @@ def is_bpm_task(task: dict) -> bool:
     return any(kw in haystack for kw in BPM_KEYWORDS)
 
 COMMENT_TYPE_BOX = {
-    "new_task":       box_new_task,
     "missing_info":   box_missing_info,
     "analytics":      box_analytics,
     "replan":         box_replan,
@@ -615,9 +611,7 @@ def determine_comment_type(
     bot_type = ""
     if bot_c:
         content = re.sub('<[^>]+>', '', bot_c.get("content", "")).lower()
-        if "onboarding check-in" in content or "new task" in content:
-            bot_type = "new_task"
-        elif "check-in required" in content or "missing" in content:
+        if "check-in required" in content or "missing" in content:
             bot_type = "missing_info"
 
     # ── BPM task: post ERP/BPM analysis once per status cycle via Claude ────────
@@ -644,7 +638,7 @@ def determine_comment_type(
         return "feedback_ack"
 
     # ── Feedback loop: bot asked a question, no reply for too long ────────────
-    if bot_type in ("new_task", "missing_info") and not human_replied:
+    if bot_type == "missing_info" and not human_replied:
         if hours_since_last_bot >= NO_REPLY_HOURS:
             return "replan"
 
@@ -667,13 +661,11 @@ def determine_comment_type(
     has_due     = bool(task.get("end_date", ""))
     has_desc    = len(re.sub(r'<[^>]+>', '', task.get("description", "")).strip()) >= 10
 
-    # ── Open tasks: only comment once (new_task) then wait for status change ──
+    # ── Open tasks ───────────────────────────────────────────────────────────────
     if status in OPEN_STATUSES:
-        if not comments:
-            return "new_task"
         if not has_owner or not has_due or not has_desc:
             return "missing_info"
-        return None   # open but not yet picked up — don't nag
+        return "analytics"
 
     # ── On hold ──────────────────────────────────────────────────────────────
     if "on hold" in status or "hold" in status:
@@ -683,7 +675,7 @@ def determine_comment_type(
     if not comments:
         if not has_owner or not has_due:
             return "missing_info"
-        return "new_task"
+        return "analytics"
 
     # ── Priority matrix ───────────────────────────────────────────────────────
     if priority == "high":
@@ -722,17 +714,6 @@ Return EXACTLY this JSON (no markdown, no code fences):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 COMMENT TYPE INSTRUCTIONS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-"new_task"
-  This task just appeared with no activity. Greet the task by its actual NAME.
-  Look at the snapshot and identify ONLY what is genuinely missing:
-  - If owner is empty → ask who will own this task
-  - If due_date is empty → ask for a target completion date
-  - If description is empty or vague → ask for a brief scope/goal description
-  - If start_date is empty → ask when work will begin
-  - Always ask: what are the known blockers or dependencies before starting?
-  Do NOT ask about things already present in the snapshot.
-  Keep tone friendly and welcoming.
 
 "missing_info"
   The task has been open/active but key context is missing or it appears stalled.
@@ -1325,7 +1306,6 @@ async def handle_unassigned_tasks(all_tasks: list[dict], users: list[dict]) -> N
 # ── Daily report email ────────────────────────────────────────────────────────
 
 ACTION_LABEL = {
-    "new_task":          ("New Task Check-in",       "#8b5cf6"),
     "missing_info":      ("Follow-up Required",      "#f59e0b"),
     "feedback_ack":      ("Reply Acknowledged",      "#10b981"),
     "analytics":         ("Analytics Posted",        "#0ea5e9"),
@@ -1421,10 +1401,10 @@ async def build_per_person_html(tasks: list[dict], results: list[dict], run_time
     SC = {"open":"#3b82f6","in progress":"#0ea5e9","not started":"#6b7280","on hold":"#f59e0b",
           "closed":"#22c55e","completed":"#22c55e","ready for uat":"#8b5cf6",
           "uat":"#8b5cf6","done":"#22c55e"}
-    AL = {"new_task":"#8b5cf6","missing_info":"#f59e0b","feedback_ack":"#10b981",
+    AL = {"missing_info":"#f59e0b","feedback_ack":"#10b981",
           "analytics":"#0ea5e9","replan":"#ef4444","digest":"#6b7280",
           "escalation_email":"#dc2626","comment_failed":"#ef4444"}
-    LL = {"new_task":"Check-in","missing_info":"Follow-up","feedback_ack":"Reply Ack",
+    LL = {"missing_info":"Follow-up","feedback_ack":"Reply Ack",
           "analytics":"Analytics","replan":"Replan","digest":"Digest",
           "escalation_email":"Escalated","comment_failed":"Failed"}
 
